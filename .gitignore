@@ -1,0 +1,90 @@
+# ============================================================
+# ★ 最重要的一条：绝对不要提交 .env
+#
+# .env 里放着 OPENAI_API_KEY / SEARCH_API_KEY 等密钥，
+# 一旦提交到 Git，即使之后删掉，历史记录里依然能翻出来，
+# 必须视为"密钥已泄漏"，只能去服务商后台吊销重发。
+#
+# 这里的规则同时匹配仓库根目录和 backend/ frontend/ 里的 .env，
+# 但不影响 .env.example（模板文件，必须提交，供别人复制）。
+# ============================================================
+.env
+.env.*
+!.env.example
+# 部署配置模板，同 .env.example 一样必须提交。
+# ★ 这条否定规则必须写在 `.env.*` **后面**才有用 ——
+#   .gitignore 是后面的规则覆盖前面的。
+#   验证：git check-ignore -v .env.deploy.example
+#         输出应该指向 !.env.deploy.example，指向 .env.* 就说明顺序写错了。
+!.env.deploy.example
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虚拟环境
+venv/
+.venv/
+ENV/
+env/
+
+# ---------- Django ----------
+# 本地开发数据库，每个人自己 migrate 生成，不入库
+*.sqlite3
+*.sqlite3-journal
+db.sqlite3
+/backend/media/
+/backend/staticfiles/
+
+# ---------- 测试与工具缓存 ----------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# ---------- Node / 前端 ----------
+node_modules/
+dist/
+dist-ssr/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.eslintcache
+
+# ---------- 编辑器 / 系统 ----------
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ---------- 日志与临时文件 ----------
+*.log
+logs/
+scratch_*
+tmp_*

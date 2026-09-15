@@ -1,0 +1,1255 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>README.md</title>
+<meta http-equiv="Content-type" content="text/html;charset=UTF-8">
+
+<style>
+/* https://github.com/microsoft/vscode/blob/master/extensions/markdown-language-features/media/markdown.css */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+body {
+	font-family: var(--vscode-markdown-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif);
+	font-size: var(--vscode-markdown-font-size, 14px);
+	padding: 0 26px;
+	line-height: var(--vscode-markdown-line-height, 22px);
+	word-wrap: break-word;
+}
+
+#code-csp-warning {
+	position: fixed;
+	top: 0;
+	right: 0;
+	color: white;
+	margin: 16px;
+	text-align: center;
+	font-size: 12px;
+	font-family: sans-serif;
+	background-color:#444444;
+	cursor: pointer;
+	padding: 6px;
+	box-shadow: 1px 1px 1px rgba(0,0,0,.25);
+}
+
+#code-csp-warning:hover {
+	text-decoration: none;
+	background-color:#007acc;
+	box-shadow: 2px 2px 2px rgba(0,0,0,.25);
+}
+
+body.scrollBeyondLastLine {
+	margin-bottom: calc(100vh - 22px);
+}
+
+body.showEditorSelection .code-line {
+	position: relative;
+}
+
+body.showEditorSelection .code-active-line:before,
+body.showEditorSelection .code-line:hover:before {
+	content: "";
+	display: block;
+	position: absolute;
+	top: 0;
+	left: -12px;
+	height: 100%;
+}
+
+body.showEditorSelection li.code-active-line:before,
+body.showEditorSelection li.code-line:hover:before {
+	left: -30px;
+}
+
+.vscode-light.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.15);
+}
+
+.vscode-light.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.40);
+}
+
+.vscode-light.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-dark.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.4);
+}
+
+.vscode-dark.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.60);
+}
+
+.vscode-dark.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-high-contrast.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 160, 0, 0.7);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 160, 0, 1);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+img {
+	max-width: 100%;
+	max-height: 100%;
+}
+
+a {
+	text-decoration: none;
+}
+
+a:hover {
+	text-decoration: underline;
+}
+
+a:focus,
+input:focus,
+select:focus,
+textarea:focus {
+	outline: 1px solid -webkit-focus-ring-color;
+	outline-offset: -1px;
+}
+
+hr {
+	border: 0;
+	height: 2px;
+	border-bottom: 2px solid;
+}
+
+h1 {
+	padding-bottom: 0.3em;
+	line-height: 1.2;
+	border-bottom-width: 1px;
+	border-bottom-style: solid;
+}
+
+h1, h2, h3 {
+	font-weight: normal;
+}
+
+table {
+	border-collapse: collapse;
+}
+
+table > thead > tr > th {
+	text-align: left;
+	border-bottom: 1px solid;
+}
+
+table > thead > tr > th,
+table > thead > tr > td,
+table > tbody > tr > th,
+table > tbody > tr > td {
+	padding: 5px 10px;
+}
+
+table > tbody > tr + tr > td {
+	border-top: 1px solid;
+}
+
+blockquote {
+	margin: 0 7px 0 5px;
+	padding: 0 16px 0 10px;
+	border-left-width: 5px;
+	border-left-style: solid;
+}
+
+code {
+	font-family: Menlo, Monaco, Consolas, "Droid Sans Mono", "Courier New", monospace, "Droid Sans Fallback";
+	font-size: 1em;
+	line-height: 1.357em;
+}
+
+body.wordWrap pre {
+	white-space: pre-wrap;
+}
+
+pre:not(.hljs),
+pre.hljs code > div {
+	padding: 16px;
+	border-radius: 3px;
+	overflow: auto;
+}
+
+pre code {
+	color: var(--vscode-editor-foreground);
+	tab-size: 4;
+}
+
+/** Theming */
+
+.vscode-light pre {
+	background-color: rgba(220, 220, 220, 0.4);
+}
+
+.vscode-dark pre {
+	background-color: rgba(10, 10, 10, 0.4);
+}
+
+.vscode-high-contrast pre {
+	background-color: rgb(0, 0, 0);
+}
+
+.vscode-high-contrast h1 {
+	border-color: rgb(0, 0, 0);
+}
+
+.vscode-light table > thead > tr > th {
+	border-color: rgba(0, 0, 0, 0.69);
+}
+
+.vscode-dark table > thead > tr > th {
+	border-color: rgba(255, 255, 255, 0.69);
+}
+
+.vscode-light h1,
+.vscode-light hr,
+.vscode-light table > tbody > tr + tr > td {
+	border-color: rgba(0, 0, 0, 0.18);
+}
+
+.vscode-dark h1,
+.vscode-dark hr,
+.vscode-dark table > tbody > tr + tr > td {
+	border-color: rgba(255, 255, 255, 0.18);
+}
+
+</style>
+
+<style>
+/* Tomorrow Theme */
+/* http://jmblog.github.com/color-themes-for-google-code-highlightjs */
+/* Original theme - https://github.com/chriskempson/tomorrow-theme */
+
+/* Tomorrow Comment */
+.hljs-comment,
+.hljs-quote {
+	color: #8e908c;
+}
+
+/* Tomorrow Red */
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-regexp,
+.hljs-deletion {
+	color: #c82829;
+}
+
+/* Tomorrow Orange */
+.hljs-number,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-literal,
+.hljs-type,
+.hljs-params,
+.hljs-meta,
+.hljs-link {
+	color: #f5871f;
+}
+
+/* Tomorrow Yellow */
+.hljs-attribute {
+	color: #eab700;
+}
+
+/* Tomorrow Green */
+.hljs-string,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+	color: #718c00;
+}
+
+/* Tomorrow Blue */
+.hljs-title,
+.hljs-section {
+	color: #4271ae;
+}
+
+/* Tomorrow Purple */
+.hljs-keyword,
+.hljs-selector-tag {
+	color: #8959a8;
+}
+
+.hljs {
+	display: block;
+	overflow-x: auto;
+	color: #4d4d4c;
+	padding: 0.5em;
+}
+
+.hljs-emphasis {
+	font-style: italic;
+}
+
+.hljs-strong {
+	font-weight: bold;
+}
+</style>
+
+<style>
+/*
+ * Markdown PDF CSS
+ */
+
+ body {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif, "Meiryo";
+	padding: 0 12px;
+}
+
+pre {
+	background-color: #f8f8f8;
+	border: 1px solid #cccccc;
+	border-radius: 3px;
+	overflow-x: auto;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+}
+
+pre:not(.hljs) {
+	padding: 23px;
+	line-height: 19px;
+}
+
+blockquote {
+	background: rgba(127, 127, 127, 0.1);
+	border-color: rgba(0, 122, 204, 0.5);
+}
+
+.emoji {
+	height: 1.4em;
+}
+
+code {
+	font-size: 14px;
+	line-height: 19px;
+}
+
+/* for inline code */
+:not(pre):not(.hljs) > code {
+	color: #C9AE75; /* Change the old color so it seems less like an error */
+	font-size: inherit;
+}
+
+/* Page Break : use <div class="page"/> or <div class="page"></div> to insert page break
+-------------------------------------------------------- */
+.page {
+	page-break-after: always;
+}
+
+</style>
+
+<script src="https://unpkg.com/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: document.body.classList.contains('vscode-dark') || document.body.classList.contains('vscode-high-contrast')
+          ? 'dark'
+          : 'default'
+    });
+  </script>
+<h1 id="微信公众号-ai-content-agentv1">微信公众号 AI Content Agent（V1）</h1>
+<p>一个<strong>真的会用工具</strong>的公众号内容创作助手。</p>
+<p>你告诉它「写一篇关于 2026 年 AI Agent 最新发展的公众号文章」，
+它会自己判断要不要查资料 → 自己调用搜索工具 → 自己决定打开哪个网页读原文 →
+综合资料写出一篇结构完整的文章 → 把用到的来源交给你核对。</p>
+<p><strong>它不会自动发布。</strong> V1 只生成草稿，发布这一下永远由你亲自点。</p>
+<hr>
+<h2 id="目录">目录</h2>
+<ul>
+<li><a href="#%E4%B8%80%E8%BF%99%E4%B8%AA%E9%A1%B9%E7%9B%AE%E8%83%BD%E5%81%9A%E4%BB%80%E4%B9%88">一、这个项目能做什么</a></li>
+<li><a href="#%E4%BA%8C%E5%AE%83%E6%98%AF%E6%80%8E%E4%B9%88%E5%B7%A5%E4%BD%9C%E7%9A%84">二、它是怎么工作的</a></li>
+<li><a href="#%E4%B8%89%E6%8A%80%E6%9C%AF%E6%A0%88">三、技术栈</a></li>
+<li><a href="#%E5%9B%9B%E7%9B%AE%E5%BD%95%E7%BB%93%E6%9E%84">四、目录结构</a></li>
+<li><a href="#%E4%BA%94%E5%BF%AB%E9%80%9F%E5%BC%80%E5%A7%8B">五、快速开始</a></li>
+<li><a href="#%E5%85%AD%E7%8E%AF%E5%A2%83%E5%8F%98%E9%87%8F%E8%AF%B4%E6%98%8E">六、环境变量说明</a></li>
+<li><a href="#%E4%B8%83%E6%95%B0%E6%8D%AE%E5%BA%93%E8%A1%A8">七、数据库表</a></li>
+<li><a href="#%E5%85%AB%E6%8E%A5%E5%8F%A3%E6%96%87%E6%A1%A3">八、接口文档</a></li>
+<li><a href="#%E4%B9%9D%E4%B8%A4%E4%B8%AA%E6%A0%B8%E5%BF%83%E5%B7%A5%E5%85%B7">九、两个核心工具</a></li>
+<li><a href="#%E5%8D%81%E5%AE%89%E5%85%A8%E8%AE%BE%E8%AE%A1">十、安全设计</a></li>
+<li><a href="#%E5%8D%81%E4%B8%80%E8%B7%91%E6%B5%8B%E8%AF%95">十一、跑测试</a></li>
+<li><a href="#%E5%8D%81%E4%BA%8C%E5%B8%B8%E8%A7%81%E9%97%AE%E9%A2%98">十二、常见问题</a></li>
+<li><a href="#%E5%8D%81%E4%B8%89v1-%E6%B2%A1%E5%81%9A%E7%9A%84%E4%BA%8B">十三、V1 没做的事</a></li>
+</ul>
+<hr>
+<h2 id="一这个项目能做什么">一、这个项目能做什么</h2>
+<table>
+<thead>
+<tr>
+<th>能力</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>自主研究</td>
+<td>Agent 自己决定搜索什么、搜几次、读哪个页面，不需要你写流程</td>
+</tr>
+<tr>
+<td>真实来源</td>
+<td>文章引用的每个链接，都必须是它<strong>本次真的检索到或读过</strong>的，编造的一律删除</td>
+</tr>
+<tr>
+<td>结构化产出</td>
+<td>标题、摘要、开头钩子、大纲、正文、配图建议，一次给全</td>
+</tr>
+<tr>
+<td>过程可见</td>
+<td>前端能看到「搜索了什么 → 拿到几个来源 → 读了哪篇」，不是黑盒</td>
+</tr>
+<tr>
+<td>风险提示</td>
+<td>资料不足、工具失败、达到调用上限，都会明确写出来，而不是假装一切正常</td>
+</tr>
+<tr>
+<td>人工编辑</td>
+<td>生成的是草稿，你可以改标题、改正文、标记状态</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="二它是怎么工作的">二、它是怎么工作的</h2>
+<h3 id="主流程">主流程</h3>
+<pre class="hljs"><code><div>用户填需求（主题 / 读者 / 目标 / 风格 / 篇幅）
+        ↓
+Django 校验参数，创建 AgentRun 记录
+        ↓
+★ Agent 自己做决定（这一步是循环的，不是固定流程）
+        ↓
+   大模型看到需求 ──→ 判断信息够不够
+        ↓ 不够
+   调用 web_search  ──→ 拿到一批搜索结果（自动登记来源）
+        ↓
+   大模型看搜索结果 ──→ 判断哪几篇值得细读
+        ↓
+   调用 read_webpage ──→ 读到网页正文（自动登记来源）
+        ↓ 够了
+   调用结构化输出工具，返回 ArticleDraft
+        ↓
+系统校验：文章里的来源 URL 真的出现过吗？
+        ↓ 没出现过 → 删掉，并记一条风险提示
+Markdown 转安全 HTML（防 XSS）
+        ↓
+写库：Article（草稿）+ ToolCall + Source + Message
+        ↓
+前端展示，你人工确认
+</div></code></pre>
+<p><strong>关键点：第 4~8 步的循环次数和顺序，是模型自己决定的，不是代码写死的。</strong>
+代码只负责给它工具和规矩。这就是 Agent 和「固定工作流」的区别。</p>
+<h3 id="三道防失控的闸门">三道防失控的闸门</h3>
+<p>AI 自己决定调用工具，就存在「搜起来没完」的风险。所以有三层保护：</p>
+<table>
+<thead>
+<tr>
+<th>闸门</th>
+<th>配置项</th>
+<th>默认值</th>
+<th>超了会怎样</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>工具调用次数</td>
+<td><code>MAX_TOOL_CALLS</code></td>
+<td>8</td>
+<td>停止研究，用现有资料把文章写完，并加风险提示</td>
+</tr>
+<tr>
+<td>单次搜索结果数</td>
+<td><code>MAX_SEARCH_RESULTS</code></td>
+<td>5（硬上限 10）</td>
+<td>夹到上限</td>
+</tr>
+<tr>
+<td>思考步数</td>
+<td><code>AGENT_RECURSION_LIMIT</code></td>
+<td>30</td>
+<td>LangGraph 强制中断，返回明确错误</td>
+</tr>
+</tbody>
+</table>
+<p><strong>注意：达到上限时不会失败，而是「尽力交付 + 如实告知」。</strong> 这比直接报错有用得多。</p>
+<hr>
+<h2 id="三技术栈">三、技术栈</h2>
+<p><strong>后端</strong>：Python 3.11+、Django 5.2、Django REST Framework、LangChain 1.x（<code>create_agent</code>）、
+Pydantic、httpx、BeautifulSoup4、trafilatura、MySQL 8 / SQLite</p>
+<p><strong>前端</strong>：Vue 3、Vite、TypeScript、Vue Router、Pinia、Axios、Element Plus、markdown-it</p>
+<blockquote>
+<p><strong>关于 LangGraph</strong>：它已经作为依赖装好了，V1 不直接用。
+<code>create_agent</code> 本身就是用 LangGraph 实现的，以后要做「大纲人工确认 → 写作 → 事实核查」
+这种固定流程时，可以平滑换成 LangGraph 的 <code>StateGraph</code>，不用重写业务代码。</p>
+</blockquote>
+<hr>
+<h2 id="四目录结构">四、目录结构</h2>
+<pre class="hljs"><code><div>agent_ai_biaoshu/
+├── .gitignore                    # ★ 第一条规则就是忽略 .env
+├── README.md                     # 你正在看的这份
+│
+├── backend/                      # Django 后端
+│   ├── manage.py
+│   ├── requirements.txt
+│   ├── pytest.ini                # 测试配置（强制用内存 SQLite）
+│   ├── conftest.py               # 全局测试 fixture
+│   ├── .env.example              # ★ 环境变量模板，复制成 .env 再填
+│   ├── .env                      # 你的真实密钥（已被 git 忽略，不要提交）
+│   │
+│   ├── config/                   # 项目配置
+│   │   ├── settings.py           # 所有配置都从环境变量读
+│   │   ├── settings_test.py      # 测试专用配置
+│   │   └── urls.py               # 根路由
+│   │
+│   └── apps/
+│       ├── common/               # 公共设施
+│       │   ├── exceptions.py     # 统一业务异常 + 全局异常处理器
+│       │   ├── responses.py      # 统一返回信封
+│       │   ├── middleware.py     # request_id 中间件
+│       │   ├── markdown_renderer.py  # Markdown → 安全 HTML
+│       │   ├── pagination.py
+│       │   └── utils.py
+│       │
+│       ├── accounts/             # 登录注册（复用 Django 自带 User）
+│       │
+│       ├── conversations/        # 会话与消息
+│       │   └── models.py         # Conversation / Message
+│       │
+│       ├── agent/                # ★ Agent 核心
+│       │   ├── models.py         # AgentRun / ToolCall / Source
+│       │   ├── serializers.py
+│       │   ├── views.py          # 接口（很薄，只做校验和转发）
+│       │   ├── urls.py
+│       │   ├── agents/
+│       │   │   ├── content_agent.py    # ★ 用 create_agent 搭 Agent
+│       │   │   └── audit_middleware.py # 记录每次工具调用
+│       │   ├── services/
+│       │   │   ├── model_factory.py    # ★ 全项目唯一读 API Key 的地方
+│       │   │   ├── source_registry.py  # ★ 防 AI 编造来源
+│       │   │   └── agent_service.py    # ★ 主流程编排
+│       │   ├── tools/
+│       │   │   ├── url_safety.py       # ★ 防 SSRF
+│       │   │   ├── web_search.py       # 工具 1：联网搜索
+│       │   │   └── read_webpage.py     # 工具 2：读网页正文
+│       │   ├── prompts/
+│       │   │   └── content_agent_prompt.py  # System Prompt
+│       │   ├── schemas/
+│       │   │   └── article.py        # ArticleDraft 结构化输出定义
+│       │   └── tests/                # 138 个测试
+│       │
+│       └── articles/             # 文章
+│           ├── models.py         # Article
+│           ├── services.py       # 所有写操作都在这里
+│           ├── serializers.py
+│           └── views.py
+│
+└── frontend/                     # Vue 前端
+    ├── package.json
+    ├── vite.config.ts
+    ├── .env.example
+    ├── README.md                 # 前端自己的说明
+    └── src/
+        ├── api/                  # 接口封装（http.ts 负责拆信封 + 错误翻译）
+        ├── stores/               # Pinia 状态
+        ├── pages/                # 页面
+        ├── components/           # 组件
+        ├── types/                # TypeScript 类型
+        └── utils/
+</div></code></pre>
+<hr>
+<h2 id="五快速开始">五、快速开始</h2>
+<h3 id="0-先确认环境">0. 先确认环境</h3>
+<pre class="hljs"><code><div>python --version     <span class="hljs-comment"># 需要 3.11 或更高</span>
+node -v              <span class="hljs-comment"># 需要 18 或更高</span>
+</div></code></pre>
+<h3 id="1-启动后端">1. 启动后端</h3>
+<pre class="hljs"><code><div><span class="hljs-built_in">cd</span> backend
+
+<span class="hljs-comment"># 创建并激活虚拟环境</span>
+python -m venv .venv
+
+<span class="hljs-comment"># Windows:</span>
+.venv\Scripts\activate
+<span class="hljs-comment"># macOS / Linux:</span>
+<span class="hljs-comment"># source .venv/bin/activate</span>
+
+<span class="hljs-comment"># 安装依赖</span>
+pip install -r requirements.txt
+
+<span class="hljs-comment"># 复制环境变量模板</span>
+<span class="hljs-comment"># Windows:</span>
+copy .env.example .<span class="hljs-built_in">env</span>
+<span class="hljs-comment"># macOS / Linux:</span>
+<span class="hljs-comment"># cp .env.example .env</span>
+
+<span class="hljs-comment"># ★ 现在打开 .env，把 LLM_API_KEY 和 LLM_MODEL 填上（见第六节）</span>
+
+<span class="hljs-comment"># 建表</span>
+python manage.py migrate
+
+<span class="hljs-comment"># 创建管理员账号（可以登录 /admin 后台看数据）</span>
+python manage.py createsuperuser
+
+<span class="hljs-comment"># 启动</span>
+python manage.py runserver 8000
+</div></code></pre>
+<p>看到 <code>Starting development server at http://127.0.0.1:8000/</code> 就成功了。
+浏览器打开 <a href="http://127.0.0.1:8000/health/">http://127.0.0.1:8000/health/</a>，应该看到：</p>
+<pre class="hljs"><code><div><span class="hljs-punctuation">{</span><span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-literal"><span class="hljs-keyword">true</span></span><span class="hljs-punctuation">,</span> <span class="hljs-attr">&quot;data&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span><span class="hljs-attr">&quot;status&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;ok&quot;</span><span class="hljs-punctuation">}</span><span class="hljs-punctuation">,</span> <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;&quot;</span><span class="hljs-punctuation">}</span>
+</div></code></pre>
+<h3 id="2-启动前端">2. 启动前端</h3>
+<p><strong>另开一个终端</strong>（后端要保持运行）：</p>
+<pre class="hljs"><code><div><span class="hljs-built_in">cd</span> frontend
+
+npm install
+
+<span class="hljs-comment"># 如果后端不是 8000 端口，改一下 .env 里的 VITE_API_BASE_URL</span>
+<span class="hljs-comment"># copy .env.example .env</span>
+
+npm run dev
+</div></code></pre>
+<p>浏览器打开终端里提示的地址（默认 <a href="http://localhost:5173">http://localhost:5173</a>）。</p>
+<h3 id="3-生成第一篇文章">3. 生成第一篇文章</h3>
+<ol>
+<li>打开前端页面，先<strong>注册一个账号</strong>（或直接登录）</li>
+<li>点「创建文章」</li>
+<li>主题填：<code>2026 年 AI Agent 最新发展</code></li>
+<li>其他项可以用默认值，点「开始生成」</li>
+<li><strong>耐心等待 30~120 秒</strong> —— 它真的在联网搜索和读网页</li>
+<li>生成完会自动跳到文章详情页，你能看到正文、引用来源、风险提示</li>
+</ol>
+<p>如果想看 Agent 到底做了什么，回到首页看「最近的运行」，
+里面能看到每一次工具调用的参数和结果预览。</p>
+<hr>
+<h2 id="六环境变量说明">六、环境变量说明</h2>
+<p>所有配置都在 <code>backend/.env</code> 里。<strong>这个文件已经被 <code>.gitignore</code> 忽略，不会被提交。</strong></p>
+<h3 id="必须填的不填就跑不起来">必须填的（不填就跑不起来）</h3>
+<table>
+<thead>
+<tr>
+<th>变量</th>
+<th>说明</th>
+<th>例子</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LLM_API_KEY</code></td>
+<td>大模型的 API Key</td>
+<td><code>sk-xxxxxxxx</code></td>
+</tr>
+<tr>
+<td><code>LLM_MODEL</code></td>
+<td>模型名</td>
+<td><code>gpt-4o-mini</code> / <code>deepseek-chat</code> / <code>qwen-plus</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="按需填的">按需填的</h3>
+<table>
+<thead>
+<tr>
+<th>变量</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LLM_PROVIDER</code></td>
+<td>默认 <code>openai</code>。只要你的服务兼容 OpenAI 接口就填 <code>openai</code></td>
+</tr>
+<tr>
+<td><code>LLM_BASE_URL</code></td>
+<td>用国内兼容服务时填。DeepSeek 填 <code>https://api.deepseek.com/v1</code></td>
+</tr>
+<tr>
+<td><code>SEARCH_API_KEY</code></td>
+<td>搜索服务密钥。<strong>留空也能跑</strong>，只是 Agent 拿不到外部资料，会在风险提示里说明</td>
+</tr>
+<tr>
+<td><code>SEARCH_PROVIDER</code></td>
+<td>默认 <code>tavily</code>，去 <a href="https://tavily.com">https://tavily.com</a> 注册有免费额度</td>
+</tr>
+<tr>
+<td><code>DB_ENGINE</code></td>
+<td><code>mysql</code> 或 <code>sqlite</code>，见下</td>
+</tr>
+<tr>
+<td><code>DJANGO_SECRET_KEY</code></td>
+<td>生产环境必须换成随机字符串</td>
+</tr>
+</tbody>
+</table>
+<h3 id="关于数据库">关于数据库</h3>
+<table>
+<thead>
+<tr>
+<th>方案</th>
+<th>什么时候用</th>
+<th>怎么配</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>SQLite</strong></td>
+<td>本地开发、想立刻跑起来</td>
+<td><code>DB_ENGINE=sqlite</code>，其余不用管</td>
+</tr>
+<tr>
+<td><strong>MySQL</strong></td>
+<td>正式使用</td>
+<td><code>DB_ENGINE=mysql</code>，然后填 <code>DB_NAME</code> / <code>DB_USER</code> / <code>DB_PASSWORD</code> / <code>DB_HOST</code> / <code>DB_PORT</code></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>⚠️ MySQL 版本要求：Django 5.2 需要 MySQL 8.0.11 或更高。</strong>
+如果你本机装的是 MySQL 5.7，会因为版本过低无法连接（这是 Django 的硬性要求，不是配置问题）。
+两个选择：升级到 MySQL 8，或者先用 <code>DB_ENGINE=sqlite</code> 把项目跑起来。</p>
+<p>建库语句：</p>
+<pre class="hljs"><code><div><span class="hljs-keyword">CREATE</span> DATABASE ai_content_agent <span class="hljs-keyword">CHARACTER SET</span> utf8mb4 <span class="hljs-keyword">COLLATE</span> utf8mb4_unicode_ci;
+</div></code></pre>
+<p>必须是 <code>utf8mb4</code>，否则存中文和 emoji 会出问题。</p>
+</blockquote>
+<hr>
+<h2 id="七数据库表">七、数据库表</h2>
+<p>用 <code>python manage.py migrate</code> 自动创建。</p>
+<h3 id="agent_run--一次生成任务"><code>agent_run</code> —— 一次生成任务</h3>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>id</code></td>
+<td>UUID 主键，对外叫 <code>run_id</code></td>
+</tr>
+<tr>
+<td><code>conversation_id</code></td>
+<td>属于哪个会话</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td><code>pending</code> / <code>running</code> / <code>completed</code> / <code>failed</code> / <code>cancelled</code></td>
+</tr>
+<tr>
+<td><code>input_text</code></td>
+<td>实际发给模型的完整输入（方便复盘）</td>
+</tr>
+<tr>
+<td><code>model_name</code></td>
+<td>这次用的模型</td>
+</tr>
+<tr>
+<td><code>tool_call_count</code></td>
+<td>调用了几次工具</td>
+</tr>
+<tr>
+<td><code>error_message</code></td>
+<td>失败时的中文提示（<strong>不含堆栈和密钥</strong>）</td>
+</tr>
+<tr>
+<td><code>started_at</code> / <code>completed_at</code></td>
+<td>耗时统计</td>
+</tr>
+</tbody>
+</table>
+<h3 id="tool_call--每一次工具调用"><code>tool_call</code> —— 每一次工具调用</h3>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>agent_run_id</code></td>
+<td>属于哪次运行</td>
+</tr>
+<tr>
+<td><code>tool_name</code></td>
+<td><code>web_search</code> / <code>read_webpage</code></td>
+</tr>
+<tr>
+<td><code>arguments</code></td>
+<td>调用参数（JSON）</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td><code>running</code> / <code>success</code> / <code>failed</code></td>
+</tr>
+<tr>
+<td><code>result_preview</code></td>
+<td><strong>只存摘要，最多 500 字</strong>，不存网页全文</td>
+</tr>
+<tr>
+<td><code>duration_ms</code> / <code>sequence</code></td>
+<td>耗时、顺序</td>
+</tr>
+</tbody>
+</table>
+<h3 id="source--检索到的来源"><code>source</code> —— 检索到的来源</h3>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>agent_run_id</code></td>
+<td>属于哪次运行</td>
+</tr>
+<tr>
+<td><code>url</code> / <code>url_hash</code></td>
+<td>原始地址和它的 sha256（唯一约束用哈希，因为 URL 太长建不了索引）</td>
+</tr>
+<tr>
+<td><code>domain</code></td>
+<td>域名</td>
+</tr>
+<tr>
+<td><code>snippet</code></td>
+<td><strong>摘要，最多 500 字</strong></td>
+</tr>
+<tr>
+<td><code>source_type</code></td>
+<td><code>search</code>（搜到的）/ <code>webpage</code>（真的读过全文的）</td>
+</tr>
+<tr>
+<td><code>is_cited</code> / <code>usage</code></td>
+<td>文章有没有引用它、用来支撑什么观点</td>
+</tr>
+</tbody>
+</table>
+<h3 id="article--文章"><code>article</code> —— 文章</h3>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>title</code> / <code>subtitle</code> / <code>summary</code> / <code>hook</code> / <code>outline</code></td>
+<td>标题、副标题、摘要、开头钩子、大纲</td>
+</tr>
+<tr>
+<td><code>content_markdown</code></td>
+<td>正文原始 Markdown</td>
+</tr>
+<tr>
+<td><code>content_html</code></td>
+<td>渲染并<strong>清洗过</strong>的 HTML（可以直接粘进公众号后台）</td>
+</tr>
+<tr>
+<td><code>image_suggestions</code></td>
+<td>配图建议</td>
+</tr>
+<tr>
+<td><code>source_ids</code></td>
+<td>引用的来源 id 列表</td>
+</tr>
+<tr>
+<td><code>risk_notes</code></td>
+<td>风险提示（模型给的 + 系统检测到的）</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td><code>draft</code> / <code>review</code> / <code>approved</code> / <code>archived</code></td>
+</tr>
+<tr>
+<td><code>version</code></td>
+<td>每次编辑 +1</td>
+</tr>
+<tr>
+<td><code>model_name</code> / <code>tool_call_count</code></td>
+<td>溯源信息：这篇是怎么生成的</td>
+</tr>
+</tbody>
+</table>
+<h3 id="conversation--message--会话与消息"><code>conversation</code> / <code>message</code> —— 会话与消息</h3>
+<p>记录每一轮对话。<code>Message.message_type</code> 区分 <code>text</code> / <code>tool_call</code> / <code>tool_result</code> / <code>article</code>。</p>
+<hr>
+<h2 id="八接口文档">八、接口文档</h2>
+<p>统一前缀 <code>/api/v1</code>，统一认证方式 <code>Authorization: Token &lt;你的token&gt;</code>。</p>
+<h3 id="返回格式">返回格式</h3>
+<p>成功：</p>
+<pre class="hljs"><code><div><span class="hljs-punctuation">{</span> <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-literal"><span class="hljs-keyword">true</span></span><span class="hljs-punctuation">,</span> <span class="hljs-attr">&quot;data&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span> ... <span class="hljs-punctuation">}</span><span class="hljs-punctuation">,</span> <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;&quot;</span> <span class="hljs-punctuation">}</span>
+</div></code></pre>
+<p>失败：</p>
+<pre class="hljs"><code><div><span class="hljs-punctuation">{</span>
+  <span class="hljs-attr">&quot;success&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-literal"><span class="hljs-keyword">false</span></span><span class="hljs-punctuation">,</span>
+  <span class="hljs-attr">&quot;error&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-punctuation">{</span>
+    <span class="hljs-attr">&quot;code&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;VALIDATION_ERROR&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;message&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;请填写文章主题。&quot;</span><span class="hljs-punctuation">,</span>
+    <span class="hljs-attr">&quot;request_id&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-string">&quot;1c4021fe&quot;</span>
+  <span class="hljs-punctuation">}</span>
+<span class="hljs-punctuation">}</span>
+</div></code></pre>
+<blockquote>
+<p>报错时把 <code>request_id</code> 给后端，能直接在日志里定位到这一次请求。
+<strong>失败响应里永远不会有堆栈、文件路径、API Key。</strong></p>
+</blockquote>
+<h3 id="接口列表">接口列表</h3>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>路径</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>POST</td>
+<td><code>/auth/register</code></td>
+<td>注册，直接返回 token</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/auth/login</code></td>
+<td>登录，返回 token</td>
+</tr>
+<tr>
+<td>POST</td>
+<td><code>/auth/logout</code></td>
+<td>退出（删掉 token）</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/auth/me</code></td>
+<td>当前用户信息</td>
+</tr>
+<tr>
+<td><strong>POST</strong></td>
+<td><strong><code>/agent/runs</code></strong></td>
+<td><strong>★ 创建生成任务（同步，会等 30~120 秒）</strong></td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/agent/runs</code></td>
+<td>我的历史运行记录</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/agent/runs/{run_id}</code></td>
+<td>某次运行的状态</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/agent/runs/{run_id}/tool-calls</code></td>
+<td>工具调用过程（前端时间线）</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/agent/runs/{run_id}/sources</code></td>
+<td>这次检索到的所有来源</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/agent/conversations</code></td>
+<td>我的会话列表</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/agent/conversations/{id}/messages</code></td>
+<td>会话里的消息</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/articles</code></td>
+<td>文章列表（支持 <code>?status=</code> <code>?keyword=</code> <code>?page=</code>）</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/articles/stats/</code></td>
+<td>首页统计</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/articles/{id}</code></td>
+<td>文章详情</td>
+</tr>
+<tr>
+<td>PATCH</td>
+<td><code>/articles/{id}</code></td>
+<td>编辑文章</td>
+</tr>
+<tr>
+<td>DELETE</td>
+<td><code>/articles/{id}</code></td>
+<td>归档（软删除）</td>
+</tr>
+<tr>
+<td>GET</td>
+<td><code>/articles/{id}/sources</code></td>
+<td>这篇文章引用的来源</td>
+</tr>
+</tbody>
+</table>
+<h3 id="常用错误码">常用错误码</h3>
+<table>
+<thead>
+<tr>
+<th>code</th>
+<th>HTTP</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>VALIDATION_ERROR</code></td>
+<td>400</td>
+<td>参数不对，<code>message</code> 里有中文说明</td>
+</tr>
+<tr>
+<td><code>UNAUTHENTICATED</code></td>
+<td>401</td>
+<td>没登录或 token 过期（前端会自动跳登录页）</td>
+</tr>
+<tr>
+<td><code>NOT_FOUND</code></td>
+<td>404</td>
+<td>资源不存在<strong>或不属于你</strong>（故意不区分，避免泄露 id 是否存在）</td>
+</tr>
+<tr>
+<td><code>CONVERSATION_NOT_FOUND</code></td>
+<td>400</td>
+<td>指定的会话不存在或不属于你</td>
+</tr>
+<tr>
+<td><code>AGENT_EXECUTION_FAILED</code></td>
+<td>502</td>
+<td>Agent 执行失败</td>
+</tr>
+<tr>
+<td><code>MODEL_PROVIDER_ERROR</code></td>
+<td>502</td>
+<td>大模型调用失败（Key 不对 / 余额不足 / 网络不通）</td>
+</tr>
+<tr>
+<td><code>STRUCTURED_OUTPUT_ERROR</code></td>
+<td>502</td>
+<td>模型没按格式返回文章</td>
+</tr>
+<tr>
+<td><code>AGENT_LIMIT_EXCEEDED</code></td>
+<td>429</td>
+<td>超过调用限制</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="九两个核心工具">九、两个核心工具</h2>
+<h3 id="web_search--联网搜索"><code>web_search</code> —— 联网搜索</h3>
+<ul>
+<li>输入关键词，返回标题 + 链接 + 摘要</li>
+<li><strong>每一条结果都会自动登记进「来源登记簿」</strong>，这是后面防伪造的基础</li>
+<li>搜索服务挂了不会抛异常，而是返回错误码，Agent 会基于现有信息继续写作（场景 E）</li>
+<li>结果条数被双重夹紧：<code>max(1, min(请求值, MAX_SEARCH_RESULTS, 10))</code></li>
+</ul>
+<h3 id="read_webpage--读取网页正文"><code>read_webpage</code> —— 读取网页正文</h3>
+<p>处理顺序（每一步都有原因）：</p>
+<pre class="hljs"><code><div>URL 安全校验      → 防 SSRF，只允许 http/https，禁内网
+发起请求          → 带超时、带 UA
+检查 Content-Type → 只读文本，不下载 exe/zip/图片
+限制响应体大小    → 边下边数，超过 2MB 就断开
+提取正文          → trafilatura 为主，BeautifulSoup 兜底
+清理噪音          → 去掉导航栏、脚本、菜单
+长度截断          → 最多 2 万字符，防止撑爆模型上下文
+登记来源          → 标记为「读过全文」
+</div></code></pre>
+<p><strong>绝不把原始 HTML 丢给模型，也绝不把网页全文存进数据库。</strong></p>
+<hr>
+<h2 id="十安全设计">十、安全设计</h2>
+<p>这一节是这个项目最重要的部分。</p>
+<h3 id="1-密钥永远不出后端">1. 密钥永远不出后端</h3>
+<ul>
+<li>全项目<strong>只有 <code>apps/agent/services/model_factory.py</code> 一个文件</strong>允许读 <code>LLM_API_KEY</code></li>
+<li>其他任何地方都只能 <code>model = get_chat_model()</code></li>
+<li>前端<strong>不知道任何密钥</strong>，也不直接访问任何大模型 API</li>
+<li><code>.env</code> 被 <code>.gitignore</code> 忽略；<code>ToolCall</code> 记录里如果出现 <code>sk-</code> 会被自动打码</li>
+</ul>
+<h3 id="2-防-ai-编造来源本项目最有价值的设计">2. 防 AI 编造来源（本项目最有价值的设计）</h3>
+<p>问题：模型很擅长编一个「看起来很真」的链接，比如
+<code>https://fake-example-123456.com/article</code>。</p>
+<p>解法：<strong>SourceRegistry（来源登记簿）</strong></p>
+<pre class="hljs"><code><div>工具每搜到一个结果、每读成功一个页面
+        → 登记进本次运行的登记簿（只记 URL，不记全文）
+
+文章生成完
+        → 逐条核对 draft.sources 里的 URL
+        → 登记簿里没有的，直接删除
+        → 只要删过，就加一条风险提示告诉用户
+        → 最终只有校验通过的来源才会写进 Article.source_ids
+</div></code></pre>
+<p>实测效果（真实链路验证）：</p>
+<pre class="hljs"><code><div>模型返回了 1 个伪造来源
+→ 接口返回 risk_notes:
+   [&quot;模型返回了 1 个未经检索验证的来源，这些来源已被系统移除，相关引用请谨慎对待。&quot;]
+→ 文章的 sources = []
+</div></code></pre>
+<p><strong>而且：上一次运行搜到的 URL，在这一次运行时不算数</strong>，必须重新检索到才有效。</p>
+<h3 id="3-防-ssrf让别人的服务器去访问我们内网">3. 防 SSRF（让别人的服务器去访问我们内网）</h3>
+<p><code>read_webpage</code> 是唯一会「主动访问外部地址」的地方，也是最大的风险点。三道防线：</p>
+<ol>
+<li><strong>协议白名单</strong> —— 只允许 <code>http</code> / <code>https</code>。<code>file://</code>、<code>ftp://</code>、<code>javascript:</code> 全部拒绝</li>
+<li><strong>域名黑名单</strong> —— <code>localhost</code>、<code>*.internal</code>、<code>*.local</code>、<code>metadata.google.internal</code> 等</li>
+<li><strong>解析后再查 IP</strong> —— ★ 光看域名是防不住的。一个叫 <code>evil-looking-domain.com</code> 的域名
+完全可以在 DNS 里解析到 <code>192.168.1.1</code>。所以必须在<strong>真正解析出 IP 之后</strong>再检查一遍，
+私有地址（10./172.16./192.168./127./169.254.）一律拒绝</li>
+</ol>
+<p><strong>重定向也必须逐跳重新校验。</strong> 否则攻击者可以用一个正常域名 302 跳转到
+<code>http://169.254.169.254/</code>（云服务器的密钥接口）来绕过前面所有检查。
+所以 <code>read_webpage</code> 没有用 httpx 的 <code>follow_redirects</code>，而是自己写了重定向循环，
+<strong>每一次跳转都重新过一遍安全校验</strong>。</p>
+<h3 id="4-前端拿不到敏感信息">4. 前端拿不到敏感信息</h3>
+<ul>
+<li><code>error_message</code> 只存中文提示，完整堆栈只进服务器日志</li>
+<li>全局异常处理器兜底：未知异常一律返回 <code>INTERNAL_SERVER_ERROR</code>，不泄露任何细节</li>
+<li>日志里不记录 API Key、Authorization 头、用户密码</li>
+</ul>
+<h3 id="5-不存第三方内容全文">5. 不存第三方内容全文</h3>
+<ul>
+<li><code>ToolCall.result_preview</code> 最多 500 字</li>
+<li><code>Source.snippet</code> 最多 500 字</li>
+<li><code>read_webpage</code> 读到的全文<strong>只存在于这一次 Agent 执行的内存里</strong>，用完即弃</li>
+</ul>
+<h3 id="6-防越权">6. 防越权</h3>
+<p>所有查询强制带 <code>user=request.user</code>。访问别人的文章返回 <strong>404 而不是 403</strong> ——
+连「这个 id 存不存在」都不告诉对方。</p>
+<h3 id="7-防-xss">7. 防 XSS</h3>
+<p>模型生成的 Markdown 渲染成 HTML 后，用 <code>nh3</code> 清洗一遍，
+<code>&lt;script&gt;</code>、<code>onclick</code> 之类全部去掉，外链自动加 <code>rel=&quot;noopener noreferrer&quot;</code>。
+前端再用 DOMPurify 洗第二遍（双保险）。</p>
+<h3 id="8-绝不自动发布">8. 绝不自动发布</h3>
+<p><code>create_article_from_draft</code> 里写死了 <code>status=Article.Status.DRAFT</code>。
+即使你说「帮我写文章并直接发布」，V1 也只会生成草稿然后回一句
+<strong>「文章已生成草稿，等待用户确认」</strong>。这条是产品红线，不是配置项。</p>
+<hr>
+<h2 id="十一跑测试">十一、跑测试</h2>
+<pre class="hljs"><code><div><span class="hljs-built_in">cd</span> backend
+.venv/Scripts/python.exe -m pytest        <span class="hljs-comment"># Windows</span>
+<span class="hljs-comment"># .venv/bin/python -m pytest              # macOS / Linux</span>
+</div></code></pre>
+<p>测试<strong>完全离线</strong>，不需要 API Key，不花钱，大约 4 秒跑完。</p>
+<pre class="hljs"><code><div>138 passed
+</div></code></pre>
+<p>覆盖内容：</p>
+<table>
+<thead>
+<tr>
+<th>文件</th>
+<th>数量</th>
+<th>测什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_url_safety.py</code></td>
+<td>36</td>
+<td>SSRF 防护：各种协议、内网 IP、DNS 解析后仍是内网、IPv6 绕过</td>
+</tr>
+<tr>
+<td><code>test_tools.py</code></td>
+<td>25</td>
+<td>两个工具的成功/失败/超时/体积限制/重定向到内网/正文提取</td>
+</tr>
+<tr>
+<td><code>test_source_registry.py</code></td>
+<td>22</td>
+<td>防伪造来源、URL 归一化、去重</td>
+</tr>
+<tr>
+<td><code>test_agent_service.py</code></td>
+<td>15</td>
+<td><strong>端到端</strong>：真实 LangChain 循环 + 假模型 + 假搜索</td>
+</tr>
+<tr>
+<td><code>test_api.py</code></td>
+<td>40</td>
+<td>接口、参数边界、越权访问、错误信封</td>
+</tr>
+</tbody>
+</table>
+<p><strong>怎么做到不花钱的？</strong> 见 <code>apps/agent/tests/fakes.py</code>：
+用 <code>ScriptedChatModel</code> 按剧本回放模型的回答，但<strong>工具调用、中间件、来源校验、
+数据库写入全部是真的</strong>。所以测出来的可信度远高于「把所有东西都 mock 掉」。</p>
+<p>而且有一个安全网：<strong>任何测试如果忘了打桩，会立刻失败而不是偷偷去调付费大模型。</strong></p>
+<p>其他检查：</p>
+<pre class="hljs"><code><div>python manage.py check                 <span class="hljs-comment"># 配置检查</span>
+python manage.py makemigrations --check <span class="hljs-comment"># 确认模型和迁移文件一致</span>
+<span class="hljs-built_in">cd</span> ../frontend &amp;&amp; npm run build         <span class="hljs-comment"># 前端类型检查 + 打包</span>
+</div></code></pre>
+<hr>
+<h2 id="十二常见问题">十二、常见问题</h2>
+<p><strong>Q：生成很慢，一直转圈？</strong>
+A：正常。Agent 要真的联网搜索、打开网页、读完再写，30~120 秒是常态。
+前端这个接口的超时单独设成了 5 分钟。</p>
+<p><strong>Q：报错「还没有配置 LLM_MODEL，请在后端 .env 文件里填写模型名称」</strong>
+A：<code>.env</code> 里的 <code>LLM_MODEL</code> 是空的。填上模型名，比如 <code>gpt-4o-mini</code>、<code>deepseek-chat</code>。</p>
+<p><strong>Q：报错「调用大模型失败」</strong>
+A：依次检查 <code>LLM_API_KEY</code> 对不对、<code>LLM_MODEL</code> 名字对不对、
+<code>LLM_BASE_URL</code> 需不需要填（用官方 OpenAI 就留空）、账户余额够不够。</p>
+<p><strong>Q：生成的文章里说「未能获取到任何外部资料」</strong>
+A：<code>SEARCH_API_KEY</code> 没配。去 <a href="https://tavily.com">https://tavily.com</a> 注册一个免费账号填上就好了。
+不配也能用，但它只能靠模型已有知识写，时效性没保障 —— 所以系统会如实提示你。</p>
+<p><strong>Q：MySQL 连不上 / 报版本错误</strong>
+A：Django 5.2 要求 MySQL 8.0.11+。本机是 5.7 的话，
+先把 <code>DB_ENGINE</code> 改成 <code>sqlite</code> 跑起来，再考虑升级数据库。</p>
+<p><strong>Q：端口 8000 被占用</strong>
+A：换个端口 <code>python manage.py runserver 8001</code>，
+同时把 <code>frontend/.env</code> 里的 <code>VITE_API_BASE_URL</code> 改成 <code>http://localhost:8001/api/v1</code>。</p>
+<p><strong>Q：前端提示「无法连接后端服务」</strong>
+A：后端没启动，或者端口对不上（见上一条），或者 <code>.env</code> 里的
+<code>CORS_ALLOWED_ORIGINS</code> 没包含前端的地址。</p>
+<p><strong>Q：Agent 只搜索不读网页？</strong>
+A：这是模型自己的判断。如果搜索结果里的摘要已经足够，它可能就不打开原文了 ——
+这本身是合理行为，System Prompt 里也是这么教它的。想让它读得更勤，
+可以在「补充要求」里写「请打开原文核实具体数据」。</p>
+<hr>
+<h2 id="十三v1-没做的事">十三、V1 没做的事</h2>
+<p>按需求文档约定，以下<strong>明确不在 V1 范围内</strong>：</p>
+<ul>
+<li>❌ 多 Agent 协作、MCP、RAG 向量库</li>
+<li>❌ Redis / Celery / 微服务 / K8s（生成是同步的，链路最短最好调试）</li>
+<li>❌ <strong>自动发布到微信公众号</strong>（这需要公众号的开发者权限，且风险太高，永远应该人工确认）</li>
+<li>❌ AI 配图 / 视频生成</li>
+<li>❌ 小红书 / 抖音等多平台分发</li>
+<li>❌ 复杂权限、团队协作、付费系统</li>
+</ul>
+<p><strong>V1.1 可以考虑的方向</strong>（按性价比排序）：</p>
+<ol>
+<li><strong>SSE 流式推送</strong> —— 现在 POST 要等 30~120 秒，改成流式能看到「正在搜索…正在读第 2 个网页…」</li>
+<li><strong>异步任务化</strong> —— 接 Celery 或 Django 的 background task，请求立刻返回，前端轮询/订阅进度</li>
+<li><strong>LangGraph 化</strong> —— 把「大纲人工确认 → 写作 → 事实核查」做成固定流程图，让用户在中途介入</li>
+<li><strong>多平台适配</strong> —— 小红书/抖音的文案风格差异很大，可以在 Prompt 层加平台模板</li>
+<li><strong>来源可信度评分</strong> —— 按域名给来源打分，优先引用权威来源</li>
+</ol>
+<hr>
+<h2 id="许可">许可</h2>
+<p>仅供学习与内部使用。</p>
+
+</body>
+</html>

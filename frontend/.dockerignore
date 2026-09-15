@@ -1,0 +1,42 @@
+# ============================================================
+# Docker 构建上下文排除清单
+# ============================================================
+
+# ---------- ★ 最重要的一条 ----------
+# 本地那份 .env 里写的是 VITE_API_BASE_URL=http://localhost:8000/api/v1。
+# 如果它被 `COPY . .` 带进镜像，就会**覆盖掉** Dockerfile 里
+# ARG VITE_API_BASE_URL=/api/v1 设的值（.env 文件的优先级高于已存在的环境变量），
+# 构建出来的前端就会写死 localhost —— 部署上线后每个访客的请求
+# 都会打到他自己的电脑上。
+# （这里不做 !.env.example 白名单：模板文件进了镜像也没有任何用处，
+#   Vite 只会读 .env / .env.local / .env.[mode]，不会读 .env.example。）
+.env
+.env.*
+
+# ---------- 依赖与产物 ----------
+# node_modules 在镜像里会由 npm ci 重新装（用 Linux 版的二进制）
+node_modules/
+# dist 由构建阶段生成，不需要从宿主机带进去
+dist/
+dist-ssr/
+*.local
+
+# ---------- 编辑器 / 系统 ----------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---------- 日志 ----------
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.eslintcache
+
+# ---------- 文档 ----------
+README.md
+*.md
+
+# 注意：package.json 和 package-lock.json **绝对不能**排除，
+# npm ci 依赖它们，lock 文件缺了会直接构建失败。

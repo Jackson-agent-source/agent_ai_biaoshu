@@ -1,0 +1,156 @@
+# ============================================================
+# 生产部署（Docker Compose）
+#
+# 三个服务：
+#   web      nginx：对外唯一入口。前端页面 + 反代后端
+#   backend  gunicorn 跑 Django
+#   db       MySQL 8
+#
+# 用法：
+#   cp .env.deploy.example .env   然后把里面的值改掉（见文件里的说明）
+#   docker compose build
+#   docker compose up -d
+#   docker compose exec backend python manage.py createsuperuser
+#
+# 架构说明（为什么是"同源"）：
+#   服务器只有公网 IP、没有域名，所以没法上 HTTPS。
+#   既然如此，就让 nginx 一个入口同时提供前端页面和 API ——
+#   浏览器认为前后端是同源的，CORS 问题彻底消失，
+#   前端也能用相对路径 /api/v1，将来换域名不用重新构建前端。
+# ============================================================
+
+services:
+  # ------------------------------------------------------------------
+  # 数据库
+  # ------------------------------------------------------------------
+  db:
+    image: mysql:8.0
+    # ★ 必须 8.0.11 以上，这是 Django 5.2 的硬性要求。
+    #   （本机开发用的是 SQLite，就是因为这台机器上是 MySQL 5.7。）
+    restart: unless-stopped
+
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+
+    volumes:
+      # ★★★ 这个卷里是全部文章和账号。执行 docker compose down -v
+      #      （或者手工删掉这个卷）会**永久删除所有数据**，无法恢复。
+      #      升级代码用 down / up 没问题，但不要加 -v。
+      - mysql_data:/var/lib/mysql
+
+    # ★ 不映射端口到宿主机。
+    #   数据库只需要被 backend 容器通过容器网络访问，
+    #   暴露到公网没有任何好处，只有风险。
+    expose:
+      - "3306"
+
+    healthcheck:
+      # ★ 容器还活着 ≠ 数据库能用了。MySQL 首次启动要初始化系统表，
+      #   这段时间里端口可能是通的。用 mysqladmin 真实探活，
+      #   start_period 给它 40 秒的初始化宽限期，期间失败不算数。
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+    # 不限制日志大小的话，Docker 会把日志一直堆在磁盘上，
+    # 时间长了能把整块盘写满（这个坑很经典）。
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ------------------------------------------------------------------
+  # 后端
+  # ------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+
+    # ★ 整份配置都从这个文件来。项目里**只有这一份** .env，
+    #   不要再有 backend/.env —— 两处配置一定会写岔，
+    #   而且排查时会先看错的那一份。
+    env_file:
+      - .env
+
+    depends_on:
+      db:
+        # ★ 必须是 service_healthy，不能用 service_started。
+        #   MySQL 的"启动了"和"能连了"之间隔着十几秒，
+        #   用 started 的话 entrypoint 的 migrate 会撞在初始化中途然后失败，
+        #   容器进入重启循环，表现是 docker compose ps 一直显示 Restarting。
+        condition: service_healthy
+
+    # 只给 nginx 用，不映射到宿主机
+    expose:
+      - "8000"
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ------------------------------------------------------------------
+  # 前端（构建好的静态文件 + nginx 反代）
+  # ------------------------------------------------------------------
+  web:
+    build:
+      context: ./frontend
+      args:
+        # ★ 必须是相对路径，而且必须是**构建时**传进去的。
+        #   Vite 的环境变量是静态内联进 JS 的 —— 运行期改容器环境变量没用，
+        #   字符串已经在 bundle 里了。
+        VITE_API_BASE_URL: /api/v1
+    restart: unless-stopped
+
+    environment:
+      # ★ 告诉 nginx 后台上在哪个路径下，它才能把请求反代给 Django。
+      #   不传的话 nginx 会用它自己的默认值 /admin/ ——
+      #   而你在 .env 里把后台改成了随机路径，
+      #   结果就是后台页面打不开（请求被当成前端路由，返回 index.html）。
+      #
+      #   `${VAR:-默认值}` 是 compose 的语法：没配就用冒号后面的值。
+      #   compose 会自动读取项目根目录的 .env 来做这个替换，
+      #   所以这里拿到的和 backend 容器里的是同一个值。
+      ADMIN_URL_PATH: ${ADMIN_URL_PATH:-admin/}
+
+    depends_on:
+      backend:
+        # ★ 这里故意用 service_started 而不是 service_healthy。
+        #
+        #   nginx 一起来就能把前端页面发出去，用户马上看到登录页；
+        #   这时候后端可能还在 migrate，接口会短暂 502。
+        #   等 healthy 的话，用户会先对着一个白屏等将近一分钟，
+        #   体验差得多。
+        condition: service_started
+
+    ports:
+      # 唯一对外暴露的端口。防火墙只需要放行这一个（和 SSH）。
+      #
+      # ★ 默认 8080 而不是 80：这台服务器上装了宝塔面板，
+      #   宝塔自带一个 nginx 占着 80。用 80 的话这里会报
+      #       Bind for 0.0.0.0:80 failed: port is already allocated
+      #   容器根本起不来。
+      #
+      # ★ WEB_BIND 是用来切换"共享"和"独占"的：
+      #     0.0.0.0  -> 直接对外，浏览器访问 http://<IP>:8080
+      #     127.0.0.1 -> 只有本机能连，让宝塔的 nginx 反代过来，
+      #                  浏览器访问 http://<IP>（地址更干净，
+      #                  将来能直接用宝塔的 SSL 一键上 HTTPS）
+      - "${WEB_BIND:-0.0.0.0}:${WEB_PORT:-8080}:80"
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  mysql_data:
