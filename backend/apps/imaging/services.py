@@ -12,6 +12,7 @@ import logging
 import time
 
 from django.conf import settings
+from django.core.files.base import ContentFile
 from django.db import transaction
 from django.utils import timezone
 
@@ -236,17 +237,31 @@ def generate_image(
     width, height = image_utils.probe(data)
 
     record.status = GeneratedImage.Status.SUCCEEDED
-    record.data = data
     record.content_type = image_utils.sniff_content_type(data)
     record.byte_size = len(data)
     record.width = width
     record.height = height
     record.revised_prompt = truncate(result.revised_prompt or "", 2000, "")
     record.error_message = ""
+
+    # ★ 唯一的写文件点。
+    #   失败路径（上面那个 if not result.ok）不碰文件 ——
+    #   upload_to 每次调用都会生成一个新的 uuid4，多写一次就多一个孤儿文件。
+    #
+    # ★ save=False + 下面把 "image_file" 放进 update_fields，是**两件必须一起做**的事：
+    #   save=False 阻止 FieldFile.save() 内部再触发一次 record.save()（那会写全表字段）；
+    #   而 update_fields 里**必须**有 "image_file"，否则文件名不落库 ——
+    #   表现是图片明明生成了、磁盘上有，列表里却全是"图片没了"。
+    #   这是这次改造最隐蔽的一个坑。
+    record.image_file.save(
+        f"{record.id}{image_utils.extension_for(record.content_type)}",
+        ContentFile(data),
+        save=False,
+    )
     record.save(
         update_fields=[
             "status",
-            "data",
+            "image_file",
             "content_type",
             "byte_size",
             "width",
@@ -320,6 +335,9 @@ def delete_image(*, image: GeneratedImage) -> None:
     不做软删除：配图是可再生的（大不了重新生成一张），
     而且留着会让"这篇到底有几张图"变得难以判断。
     真要保留，用户不点删除就行了。
+
+    磁盘上的文件由 GeneratedImage 的 post_delete 信号清理，这里不用管 ——
+    那样 Article 级联删除时也能一并收拾干净。
     """
     image_id = image.id
     image.delete()

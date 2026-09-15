@@ -1,10 +1,13 @@
 """
 配图后台。
 
-★ 这里**不显示图片本体**（不把 data 塞进 list_display 或 readonly_fields）。
-  Django admin 会把 BinaryField 渲染成一个巨大的文本域，几百 KB 的二进制
-  变成一个几百万字符的输入框，页面直接卡死。
-  要看图，用「预览」那一列点出去（走 /api/v1/images/<id>/file）。
+★ 图片改成文件存储之后，"BinaryField 渲染成巨大文本域把页面卡死"这个
+  顾虑没有了，`image_file` 现在可以安全地放进 readonly_fields
+  （admin 只会显示成一个指向 /media/... 的链接）。
+
+★ 但**仍然不在 list_display 里放缩略图**：一页 100 行就是 100 个图片请求，
+  列表页会变得很难用（理由从"数据库大字段"换成了"带宽+首屏"）。
+  要逐张看图，用「预览」那一列点出去；详情页里有一张缩略图。
 """
 
 from __future__ import annotations
@@ -43,10 +46,11 @@ class GeneratedImageAdmin(admin.ModelAdmin):
         "wechat_url",
         "created_at",
         "updated_at",
+        # 文件字段只读：让用户能在后台看到文件路径、点开预览，
+        # 但不允许手工改（改了会让 byte_size/width/height 和实际文件对不上）。
+        "image_file",
     )
     date_hierarchy = "created_at"
-    # 二进制字段不进表单
-    exclude = ("data",)
     fieldsets = (
         ("归属", {"fields": ("id", "article", "user")}),
         ("内容", {"fields": ("suggestion_index", "suggestion", "prompt", "revised_prompt")}),
@@ -56,6 +60,7 @@ class GeneratedImageAdmin(admin.ModelAdmin):
             "图片信息",
             {
                 "fields": (
+                    "image_file",
                     "content_type",
                     "width",
                     "height",
@@ -85,14 +90,14 @@ class GeneratedImageAdmin(admin.ModelAdmin):
 
     @admin.display(description="预览")
     def preview(self, obj: GeneratedImage) -> str:
-        """一个跳到取图接口的链接。
+        """一个跳到图片地址的链接。
 
         用链接而不是 <img>：后台列表一页 100 行，
         每行都加载一张几百 KB 的图，页面会慢得没法用。
         """
-        if not obj.data:
+        if not obj.image_file:
             return "-"
         return format_html(
-            '<a href="/api/v1/images/{}/file" target="_blank" rel="noopener">查看</a>',
-            obj.id,
+            '<a href="{}" target="_blank" rel="noopener">查看</a>',
+            obj.image_file.url,
         )

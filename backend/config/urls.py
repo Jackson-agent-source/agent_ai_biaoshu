@@ -3,7 +3,8 @@
 所有业务接口统一挂在 /api/v1/ 下面：
     /api/v1/auth/...       登录注册
     /api/v1/agent/...      Agent 运行、工具调用记录、来源
-    /api/v1/articles/...   文章
+    /api/v1/articles/...   文章（含配图、公众号推送）
+    /media/...             配图文件（生产由 nginx 直接发，开发由 Django 发）
     /admin/                Django 自带的数据库管理后台
 """
 
@@ -82,4 +83,22 @@ urlpatterns = [
     # 所以这里显式把不带斜杠的地址也指到同一个 View，让两种写法都能用。
     path("api/v1/articles", ArticleListView.as_view(), name="article-list-no-slash"),
     path("api/v1/articles/", include("apps.articles.urls")),
+    # 配图与公众号推送。两个 app 的 url 里写的是相对路径，
+    # 都挂在 api/v1/ 下面，各自的前缀（articles/... / images/... /
+    # wechat-publishes/...）互不冲突。
+    path("api/v1/", include("apps.imaging.urls")),
+    path("api/v1/", include("apps.wechat.urls")),
 ]
+
+# ★ 本地开发时由 Django 自己把配图发出去。
+#
+#   生产环境走的是 nginx（frontend/nginx.conf 里的 location ^~ /media/），
+#   请求根本进不到 Django；但本地开发没有 nginx，不加这一段的话
+#   <img src="/media/..."> 会 404。
+#
+#   static() 在 DEBUG=False 时本来就返回空列表，这里显式 if 一遍
+#   只是为了让"只在开发环境生效"这件事一眼可见。
+if settings.DEBUG:
+    from django.conf.urls.static import static
+
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

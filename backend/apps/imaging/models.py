@@ -1,26 +1,85 @@
 """
 配图数据模型。
 
-设计要点（为什么图片二进制直接进数据库）：
+设计要点（图片存文件系统，不存数据库）：
 
-    GeneratedImage.data 是 BinaryField，图片**不落磁盘**。
+    GeneratedImage.image_file 是 FileField，图片落在 MEDIA_ROOT 下，
+    由 Docker 命名卷 uploads 持久化，生产环境由 nginx 直接从卷里发出去。
 
-    理由：这台服务器上跑的是 Docker Compose，如果图片写文件系统，就得
-    新增一个共享卷、给 backend 和 nginx 各挂一次、再加一条 nginx 的
-    /media/ 路由，备份也要多管一份。而 mysqldump 本来就会带上二进制字段，
-    所以"存数据库"意味着**部署步骤零增加、备份自动覆盖图片**。
+    ★ 这里改过一次主意，把两次的理由都记下来，免得后人反复推翻：
 
-    代价如实记录：每张图约 300KB 进库，备份文件会同步变大。
-    50 篇文章 × 3 张 ≈ 45MB，这个量级完全没问题。
-    真要涨到几个 G，再换文件存储是个局部改动（只动 views 里的取图那一段）。
+    最初是 BinaryField（图片二进制进 MySQL），理由是"mysqldump 本来就会带上
+    二进制字段，存数据库等于部署步骤零增加、备份自动覆盖图片"。
+
+    换成文件系统的原因有三个，第一个是决定性的：
+      1. 每张图约 300KB 直接进库，MySQL 的 innodb_log_file_size 和
+         max_allowed_packet 都要跟着图片大小走；而 mysqldump 出来的备份里
+         混着几百 MB 的二进制，restore 一次要很久，也没法只恢复图片。
+      2. 图片经 Django 进程转发（旧 ImageFileView）意味着每张图都占一个
+         gunicorn 的 gthread worker（只有 3×4=12 个），图片一多就把
+         API 请求饿死了。交给 nginx 发是零成本的。
+      3. 浏览器能直接缓存、CDN 能直接接管，Django 侧不用管 Range/ETag。
+
+    代价如实记录（都会在 README 的部署章节里写到）：
+      · 多了一个 uploads 命名卷，`docker compose down -v` 会**连图片一起删**
+      · 备份流程要同时打包数据库和这个卷，只 dump 数据库会丢图
+      · 删记录不会再自动删文件，得靠下面的 post_delete 信号兜住
+
+★ 关于取图路径的安全性：
+
+    文件名里是一段**独立的 uuid4**（不是记录 id），由 image_upload_to 生成。
+    这不是"顺手加的随机数"，而是这条链路上唯一的访问控制 ——
+    <img src> 带不了 Authorization 头，取图接口只能是公开的，
+    所以"路径猜不出来"就是全部的安全性。
+    刻意不把记录的 id 编进路径：那样一旦有人为了 admin 方便把主键换成
+    自增或时间有序的 UUID，整个 media 目录就同时变成可枚举的，
+    而且不会有任何报错、也不会有任何测试变红。
+    扩展名走白名单：nginx 从**同源**发 /media/，绝不能让 .svg/.html
+    这类能带脚本的文件落进那个目录。
 """
 
 from __future__ import annotations
 
+import logging
+import os
 import uuid
 
 from django.conf import settings
 from django.db import models
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
+from django.utils import timezone
+
+logger = logging.getLogger(__name__)
+
+# 允许落盘的扩展名白名单。
+# ★ 这是一条**安全**约束，不是格式偏好：/media/ 和网站同源，
+#   一个 .svg 或 .html 落进去就是一个存储型 XSS 的入口。
+ALLOWED_IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp"})
+
+
+def image_upload_to(instance: "GeneratedImage", filename: str) -> str:
+    """决定图片落在 MEDIA_ROOT 下的哪个位置。
+
+    形如 images/2026/09/3f2a...c1.jpg（32 位 uuid4 十六进制）。
+
+    ★ 为什么必须是 callable，而不是 upload_to="images/%Y/%m/" 这种字符串：
+      字符串写法下 Django 会用"传进来的文件名 + 冲突时的随机后缀"，
+      路径的不可猜性就绑死在记录 id 上了（见模块开头的说明）。
+      这里用一条**独立于主键**的 uuid4 把这个属性焊死。
+
+    ★ 顺带的好处：重新生成必然是一个新文件名，永远不覆盖旧文件，
+      所以 nginx 那边可以放心给 /media/ 打 immutable 的长缓存。
+
+    ★ 分片用 timezone.now() 而**不是** instance.created_at：
+      created_at 是 auto_now_add，在实例保存前是 None，
+      在 upload_to 里读它会直接 TypeError: unsupported format string
+      passed to NoneType。这是个很容易踩的坑。
+    """
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+        ext = ".jpg"
+    return f"images/{timezone.now():%Y/%m}/{uuid.uuid4().hex}{ext}"
 
 
 class GeneratedImage(models.Model):
@@ -33,8 +92,10 @@ class GeneratedImage(models.Model):
         FAILED = "failed", "失败"
 
     # 用 UUID 而不是自增 id：
-    #   1. 取图的接口 /api/v1/images/<id>/file 是 AllowAny（浏览器的 <img>
+    #   1. 取图接口 /api/v1/images/<id>/file 是 AllowAny（浏览器的 <img>
     #      带不了 Authorization 头），UUID4 不可猜，等于一条隐式的访问凭据。
+    #      （正常取图走 nginx 的 /media/，那条路靠的是文件名里的 uuid4，
+    #        见 image_upload_to 的说明。）
     #   2. 和项目里 Article / AgentRun 的写法一致。
     # 注意：不能用 default=uuid.uuid4 之外的"顺序型"UUID（比如 uuid1），
     # 那样会泄露时间和 MAC 地址，也就能被猜出来。
@@ -72,9 +133,23 @@ class GeneratedImage(models.Model):
     )
 
     # ---- 图片本体 ----
-    # null=True 而不是 default=b""：生成中/失败时这一列应该是 NULL，
-    # 一眼能看出"还没图"，也能省下空串占位。
-    data = models.BinaryField("图片二进制", null=True, blank=True)
+    # ★ 用 FileField 而不是 ImageField：
+    #   ImageField 的价值是"校验用户上传的确实是图片"，而我们的图是
+    #   providers.py 从生图 API 拿到的 bytes，本来就不是用户上传的。
+    #   而且它的 width_field/height_field 会把宽高写库，可下面的
+    #   width/height 是 image_utils.probe() 算的、还允许是 None，
+    #   两套逻辑叠在一起只会打架。
+    #
+    # ★ 用 default="" 而不是 null=True：
+    #   FileField 的空值是**空字符串**不是 NULL，官方明确不建议对它用
+    #   null=True（会出现 "" 和 NULL 两种"空"，查询要写两遍）。
+    image_file = models.FileField(
+        "图片文件",
+        upload_to=image_upload_to,
+        max_length=255,
+        blank=True,
+        default="",
+    )
     content_type = models.CharField("MIME 类型", max_length=50, blank=True, default="image/jpeg")
     width = models.PositiveIntegerField("宽", null=True, blank=True)
     height = models.PositiveIntegerField("高", null=True, blank=True)
@@ -123,5 +198,55 @@ class GeneratedImage(models.Model):
 
     @property
     def has_data(self) -> bool:
-        """有没有图片二进制。列表接口靠它判断要不要显示"图片没了"。"""
-        return bool(self.data)
+        """有没有图片文件。界面靠它判断要不要显示"图片没了"。
+
+        FileField 的 __bool__ 返回 bool(self.name)，空串就是 False，
+        所以这里不需要额外判空。
+        """
+        return bool(self.image_file)
+
+    def read_bytes(self) -> bytes:
+        """把图片读成 bytes；读不到返回 b""。
+
+        ★ 不抛异常，和 image_utils 里那些函数一个态度：
+          文件被手工删掉了、卷没挂上、磁盘满了，都只是"这张图没了"，
+          不该让整个推送流程抛 500。上层把空 bytes 变成一句中文提示。
+
+        ★ 全项目只有微信上传那两处需要 bytes（微信的 uploadimg /
+          upload_thumb 收的就是字节流），所以读盘这件事收敛在这一个方法里。
+        """
+        if not self.image_file:
+            return b""
+        try:
+            with self.image_file.open("rb") as fh:
+                return fh.read()
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            logger.warning(
+                "配图文件读取失败 image_id=%s name=%s: %s",
+                self.id,
+                self.image_file.name,
+                exc,
+            )
+            return b""
+
+
+@receiver(post_delete, sender=GeneratedImage)
+def _delete_image_file(sender, instance: GeneratedImage, **kwargs) -> None:
+    """删记录时把磁盘上的文件一起删掉。
+
+    ★ FileField 的经典坑：**删模型不会删文件**。
+      不管的话，media/ 目录会随着"重新生成 → 删掉不满意的"无限膨胀，
+      而数据库里一条记录都没有，谁也不知道那些文件还有没有用。
+
+    ★ 为什么用信号而不是在 services.delete_image() 里手写一句：
+      Article 被删除时会 CASCADE 删掉它的 GeneratedImage，
+      那条路径根本不经过 services（admin 里删文章走的就是它）。
+      信号对"显式删除"和"级联删除"一视同仁。
+
+    ★ 重复删除是安全的：FileSystemStorage.delete() 自己吞掉 FileNotFoundError。
+
+    ★ 放在 models.py 底部而不是单独的 signals.py + apps.ready()：
+      models.py 必然会被 import，不可能漏加载。少一个启动时的失败面。
+    """
+    if instance.image_file:
+        instance.image_file.delete(save=False)

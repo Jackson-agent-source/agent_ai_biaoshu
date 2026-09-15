@@ -52,6 +52,23 @@ def _open(data: bytes) -> Image.Image | None:
     except (UnidentifiedImageError, OSError, ValueError) as exc:
         logger.warning("图片无法解码: %s", exc)
         return None
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
+        # ★ 这两个**必须单独列出来**，它们不是 OSError 的子类
+        #   （DecompressionBombError 直接继承 Exception），上面那条抓不住。
+        #
+        #   触发条件：字节里的文件头声称自己是一张巨大的图（Pillow 的阈值是
+        #   约 8900 万像素，超过 2 倍直接抛错）。这里读的字节来自**生图服务**，
+        #   不是我们自己的文件 —— 一个坏掉或恶意的中转站返回这么一坨，
+        #   就会让 DecompressionBombError 一路穿过本模块"绝不抛异常"的契约。
+        #   本模块的每个函数（probe / normalize_for_wechat_body /
+        #   make_wechat_thumb）都声明了不抛异常，漏掉这两个类等于那句声明是假的：
+        #   真出事时错误会跑到很远的地方，变成一个看不出原因的中文提示。
+        #
+        #   注意 DecompressionBombWarning 只在"警告被当成错误"（-W error）时
+        #   才会抛出来，平时不会 —— 但它同样应该被归到"这张图打不开"，
+        #   归到这里才是一致的。
+        logger.warning("图片尺寸异常，疑似解压炸弹: %s", exc)
+        return None
 
 
 def _to_rgb(image: Image.Image) -> Image.Image:
@@ -216,6 +233,21 @@ def probe(data: bytes) -> tuple[int | None, int | None]:
     if image is None:
         return None, None
     return image.width, image.height
+
+
+def extension_for(content_type: str) -> str:
+    """给落盘的文件名挑一个扩展名。
+
+    ★ 必须和 sniff_content_type() 认出来的 MIME 保持一致：
+      扩展名和真实字节对不上时，浏览器按扩展名猜 MIME，图会显示成破图。
+    ★ 认不出来时按 .jpg —— 和 sniff_content_type 的兜底一致。
+    """
+    return {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+    }.get((content_type or "").lower(), ".jpg")
 
 
 def sniff_content_type(data: bytes) -> str:

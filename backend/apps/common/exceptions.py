@@ -188,6 +188,24 @@ class WeChatPublishError(ToolError):
     message = "推送到公众号失败。"
 
 
+class WeChatPreconditionError(WeChatPublishError):
+    """推送的前置条件没满足：这篇文章还没有配图 / 没有可用的封面。
+
+    ★ 继承 WeChatPublishError 而不是 AppError，是为了让所有已有的
+      `except WeChatPublishError` 仍然抓得住它 —— 这是纯粹的增量。
+      区别只在 HTTP 状态码：502 → 400。
+
+    ★ 为什么必须是 400：和上面 WeChatNotConfiguredError 的理由一模一样 ——
+      "你还没生成配图"是**用户自己点两下就能解决**的事，
+      报 502 会让他以为服务器坏了，然后去查服务器。
+      前端也可以据此分出"引导他去生成配图"和"显示微信原文"两条路。
+    """
+
+    code = "WECHAT_PRECONDITION_FAILED"
+    message = "这篇文章还不满足推送条件。"
+    status_code = http_status.HTTP_400_BAD_REQUEST
+
+
 # ---------------------------------------------------------------------------
 # 来源校验异常
 # ---------------------------------------------------------------------------

@@ -42,6 +42,16 @@ beautifulsoup4==4.14.2
 trafilatura==2.1.0
 lxml==6.1.3
 
+# ---------- 图片处理 ----------
+# ★ 这一行不是可选的。apps/imaging/image_utils.py 里 `from PIL import Image`，
+#   缺了它整个 imaging 链路**在 import 阶段**就炸，配图功能直接不可用。
+#
+#   用来干三件事：
+#     1. probe()  读出生图模型返回的图片真实的宽高和 MIME（不信任响应头）
+#     2. normalize_for_wechat_body()  正文图压到 1MB 以内（微信 uploadimg 的硬限制）
+#     3. make_wechat_thumb()  封面图转成 JPG 并压到约 64KB（微信 thumb 的限制）
+Pillow==11.3.0
+
 # ---------- Markdown 渲染 & HTML 净化 ----------
 # markdown: 把 Agent 返回的 body_markdown 转成 HTML
 # nh3: 清洗 HTML，去掉 script 等危险标签，防 XSS（Rust 实现，速度快）

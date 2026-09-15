@@ -10,7 +10,7 @@
 
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 
 import AgentProgress from '@/components/AgentProgress.vue'
 import { ApiError } from '@/api/http'
@@ -73,7 +73,35 @@ async function handleSubmit(): Promise<void> {
     const result = await agentStore.generate(payload)
     runId.value = result.run_id
     ElMessage.success('文章生成完成')
-    await router.push({ name: 'article-detail', params: { id: result.article_id } })
+
+    // 问一句要不要现在配图。
+    //
+    // ★ 这里用**两个** try/catch 是有原因的，不是啰嗦：
+    //   ElMessageBox 用 reject 表示"用户点了取消"，这和真的出错走的是同一条
+    //   catch 分支。只写一个 try/catch 的话，用户点"先不看"会被当成生成失败，
+    //   弹出一句莫名其妙的错误提示。第一个 catch 只干一件事：把取消吃掉。
+    let wantImages = false
+    try {
+      await ElMessageBox.confirm(
+        '文章已经生成好了。要现在去生成配图吗？公众号推送要求草稿必须有配图。',
+        '生成配图',
+        {
+          confirmButtonText: '去生成配图',
+          cancelButtonText: '先不看',
+          type: 'success',
+        },
+      )
+      wantImages = true
+    } catch {
+      wantImages = false
+    }
+
+    await router.push({
+      name: 'article-detail',
+      params: { id: result.article_id },
+      // 让详情页直接停在「配图」tab 上，省掉用户自己去找的那一下
+      query: wantImages ? { tab: 'images' } : {},
+    })
   } catch (error) {
     // 后端返回的中文提示会通过 ApiError 带过来
     ElMessage.error(error instanceof ApiError ? error.message : '生成失败，请稍后重试')

@@ -19,7 +19,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from apps.articles.models import Article
-from apps.common.exceptions import WeChatPublishError
+from apps.common.exceptions import WeChatPreconditionError, WeChatPublishError
 from apps.common.utils import truncate
 from apps.imaging import image_utils
 from apps.imaging.models import GeneratedImage
@@ -61,14 +61,14 @@ def publish_article_to_wechat(
         get_article_images(article).filter(status=GeneratedImage.Status.SUCCEEDED)
     )
     if not images:
-        raise WeChatPublishError(
+        raise WeChatPreconditionError(
             "这篇文章还没有配图，无法推送。公众号要求草稿必须有封面图，"
             "请先在配图工作台生成至少一张配图。"
         )
 
     cover = get_cover_image(article, preferred_id=cover_image_id)
     if cover is None:
-        raise WeChatPublishError("没有找到可用的封面图，请先生成一张配图。")
+        raise WeChatPreconditionError("没有找到可用的封面图，请先生成一张配图。")
 
     record = WeChatPublish.objects.create(
         article=article,
@@ -184,8 +184,35 @@ def publish_article_to_wechat(
         )
         return record
 
-    except WeChatPublishError:
-        # 已经记过失败了，直接往上抛
+    except WeChatPublishError as exc:
+        # ★ 这里不能只是 raise。
+        #
+        #   上面有**四条**抛 WeChatPublishError 的路径：
+        #       · 正文图上传失败（上面第 2 步）      -> 没有落库
+        #       · 封面图上传失败（上面第 3 步）      -> 没有落库
+        #       · 正文为空（上面第 4 步）            -> 没有落库
+        #       · 微信返回了错误码（第 5 步）        -> **已经**落库成 FAILED
+        #   只有最后一条自己写了记录。如果这里直接往上抛，
+        #   钱三种情况会让记录永远停在 RUNNING：
+        #
+        #       · 前端"上次推送"那一行会一直显示「推送中」，永远不会变成失败
+        #         —— 用户以为它还在跑，其实早就在等他了
+        #       · 而且这条 RUNNING 会一直是"最近一次推送"，
+        #         把后面真正的成功记录挤在它下面
+        #
+        #   所以这里按"还在 RUNNING 就补一条失败记录"来处理，
+        #   已经落过库的那条不会被覆盖（它的 error_code 是微信的机器码，更有价值）。
+        #
+        #   注：正文图上传失败的具体微信 errcode（例如 40009）只在上面那行
+        #   logger.error 里，没往上传 —— 传它要改 _ensure_body_image 的返回类型，
+        #   而 error_message 已经说了"第几张图上传失败"，够用户和排查用了。
+        if record.status == WeChatPublish.Status.RUNNING:
+            record.status = WeChatPublish.Status.FAILED
+            record.error_code = getattr(exc, "code", "") or "WECHAT_PUBLISH_ERROR"
+            record.error_message = exc.message
+            record.save(
+                update_fields=["status", "error_code", "error_message", "updated_at"]
+            )
         raise
     except Exception as exc:
         # 任何没预料到的异常也要留痕，否则用户只会看到"服务器内部错误"，
@@ -209,13 +236,16 @@ def _ensure_body_image(*, client: WeChatClient, image: GeneratedImage) -> bool:
     if image.wechat_url:
         return True
 
-    if not image.data:
-        logger.error("配图没有二进制数据，无法上传 image_id=%s", image.id)
+    # 从文件系统读（原来是从 BinaryField 取）。read_bytes() 读不到时返回 b""，
+    # 所以下面那句判空同时覆盖"记录里没有文件"和"文件在磁盘上丢了"两种情况。
+    data = image.read_bytes()
+    if not data:
+        logger.error("配图没有图片数据，无法上传 image_id=%s", image.id)
         return False
 
     # ★ 必须压到 1MB 以内，否则微信直接拒收（40009）。
     #   生图模型给的是 1.5~3MB 的图，这一步不是优化，是必需环节。
-    compressed, content_type = image_utils.normalize_for_wechat_body(bytes(image.data))
+    compressed, content_type = image_utils.normalize_for_wechat_body(data)
     if not compressed:
         logger.error("配图压缩后为空 image_id=%s", image.id)
         return False
@@ -233,13 +263,14 @@ def _ensure_body_image(*, client: WeChatClient, image: GeneratedImage) -> bool:
 
 def _upload_cover(*, client: WeChatClient, image: GeneratedImage) -> str:
     """上传封面，返回 thumb_media_id；失败返回空字符串。"""
-    if not image.data:
-        logger.error("封面图没有二进制数据 image_id=%s", image.id)
+    data = image.read_bytes()
+    if not data:
+        logger.error("封面图没有图片数据 image_id=%s", image.id)
         return ""
 
     # ★ 封面必须单独生成：只收 JPG、约 64KB、而且是 900x500 的横图。
     #   直接拿正文图当封面，微信会自己裁中间一块，经常把主体裁掉。
-    thumb = image_utils.make_wechat_thumb(bytes(image.data))
+    thumb = image_utils.make_wechat_thumb(data)
     if not thumb:
         logger.error("封面图生成失败 image_id=%s", image.id)
         return ""

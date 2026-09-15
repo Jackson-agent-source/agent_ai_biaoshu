@@ -5,8 +5,10 @@
 你告诉它「写一篇关于 2026 年 AI Agent 最新发展的公众号文章」，
 它会自己判断要不要查资料 → 自己调用搜索工具 → 自己决定打开哪个网页读原文 →
 综合资料写出一篇结构完整的文章 → 把用到的来源交给你核对。
+文章生成之后，你还可以让它**生成配图**，再一键**推到公众号草稿箱**。
 
-**它不会自动发布。** V1 只生成草稿，发布这一下永远由你亲自点。
+**它不会自动发布。** 生成的是草稿，推到公众号也是草稿 ——
+发布这一下永远由你亲自点。
 
 ---
 
@@ -39,6 +41,8 @@
 | 过程可见 | 前端能看到「搜索了什么 → 拿到几个来源 → 读了哪篇」，不是黑盒 |
 | 风险提示 | 资料不足、工具失败、达到调用上限，都会明确写出来，而不是假装一切正常 |
 | 人工编辑 | 生成的是草稿，你可以改标题、改正文、标记状态 |
+| AI 配图 | 按文章内容自动给出配图建议，**你决定要不要生成**、生成哪几张 |
+| 推送到公众号 | 一键把文章（含配图）推进公众号**草稿箱**，你在手机上确认后再发 |
 
 ---
 
@@ -70,10 +74,22 @@ Markdown 转安全 HTML（防 XSS）
 写库：Article（草稿）+ ToolCall + Source + Message
         ↓
 前端展示，你人工确认
+        ↓
+★ 到这里 Agent 的活就干完了。**下面这两步是你点的，不是模型自己决定的**：
+        ↓
+【可选】按 article.image_suggestions 生成配图（封面 + 正文插图）
+        ↓
+【可选】推送到公众号草稿箱 → 你在手机上确认 → 手动点发布
 ```
 
 **关键点：第 4~8 步的循环次数和顺序，是模型自己决定的，不是代码写死的。**
 代码只负责给它工具和规矩。这就是 Agent 和「固定工作流」的区别。
+
+> **配图和推送为什么不交给模型自己决定？**
+> 因为它们**要花钱**（生图按张计费），而且一旦接进 Agent 循环，
+> 就多了一整类「模型在循环里反复画图把额度烧光」的失控可能。
+> 加上这两步天然需要人看一眼才知道好不好 —— 交给按钮是最合适的。
+> 它们在这张图里是**并列的一条支线**，不在 Agent 的循环体内。
 
 ### 三道防失控的闸门
 
@@ -126,7 +142,7 @@ AI 自己决定调用工具，就存在「搜起来没完」的风险。所以�
 ## 三、技术栈
 
 **后端**：Python 3.11+、Django 5.2、Django REST Framework、LangChain 1.x（`create_agent`）、
-Pydantic、httpx、BeautifulSoup4、trafilatura、MySQL 8 / SQLite
+Pydantic、httpx、BeautifulSoup4、trafilatura、Pillow（图片压缩）、MySQL 8 / SQLite
 
 **前端**：Vue 3、Vite、TypeScript、Vue Router、Pinia、Axios、Element Plus、markdown-it
 
@@ -199,17 +215,32 @@ agent_ai_biaoshu/
 │       │   │   └── article.py        # ArticleDraft 结构化输出定义
 │       │   └── tests/                # 175 个测试
 │       │
-│       └── articles/             # 文章
-│           ├── models.py         # Article
-│           ├── services.py       # 所有写操作都在这里
-│           ├── serializers.py
-│           └── views.py
+│       ├── articles/             # 文章
+│       │   ├── models.py         # Article
+│       │   ├── services.py       # 所有写操作都在这里
+│       │   ├── serializers.py
+│       │   └── views.py
+│       │
+│       ├── imaging/              # ★ AI 配图
+│       │   ├── models.py         # GeneratedImage（图片存文件系统，不存库）
+│       │   ├── providers.py      # 生图服务，OpenAI 兼容（中转站 / 官方都能接）
+│       │   ├── image_utils.py    # ★ 微信硬性尺寸限制：正文图 <1MB、封面 900x500 约 64KB
+│       │   ├── services.py       # 额度账本、插入位置计算、封面选择
+│       │   ├── views.py / urls.py / serializers.py / admin.py
+│       │   └── tests/            # 66 个测试（含落盘、路径安全、压缩）
+│       │
+│       └── wechat/               # ★ 推送到公众号草稿箱
+│           ├── client.py         # ★ stable_token + errcode 中文翻译
+│           ├── html_builder.py   # Markdown + 配图 → 公众号能吃的内联 HTML
+│           ├── services.py       # 建/更新草稿、图片压缩上传、失败留痕
+│           ├── views.py / urls.py / serializers.py / admin.py
+│           └── tests/            # 30 个测试
 │
 └── frontend/                     # Vue 前端
     ├── package.json
     ├── vite.config.ts
     ├── Dockerfile                # ★ 多阶段：node 构建 → nginx 托管
-    ├── nginx.conf                # ★ 对外唯一入口，同时反代 /api/
+    ├── nginx.conf                # ★ 对外唯一入口，同时反代 /api/ 和 /media/
     ├── .dockerignore             # ★ 挡住本地 .env，否则会写死 localhost
     ├── .env.example
     ├── README.md                 # 前端自己的说明
@@ -217,10 +248,13 @@ agent_ai_biaoshu/
         ├── api/                  # 接口封装（http.ts 负责拆信封 + 错误翻译）
         ├── stores/               # Pinia 状态
         ├── pages/                # 页面
-        ├── components/           # 组件
+        ├── components/           # 组件（含 ArticleImagePanel.vue 配图面板）
         ├── types/                # TypeScript 类型
         └── utils/
 ```
+
+> **注意后端**没有** `media/` 目录**（那是我本地跑出来的，已被 `.gitignore` 忽略）。
+> 生产环境里它由 Docker 命名卷 `uploads` 提供，见 12.1 和 12.9。
 
 ---
 
@@ -256,6 +290,8 @@ copy .env.example .env
 # cp .env.example .env
 
 # ★ 现在打开 .env，把 LLM_API_KEY 和 LLM_MODEL 填上（见第六节）
+#   想用配图和推送公众号，再把 IMAGE_* / WECHAT_* 那两组填上 ——
+#   不填也不影响生成文章，配图那里只会显示一句「未配置」的中文提示。
 
 # 建表
 python manage.py migrate
@@ -298,10 +334,25 @@ npm run dev
 3. 主题填：`2026 年 AI Agent 最新发展`
 4. 其他项可以用默认值，点「开始生成」
 5. **耐心等待 30~120 秒** —— 它真的在联网搜索和读网页
-6. 生成完会自动跳到文章详情页，你能看到正文、引用来源、风险提示
+6. 生成完会**弹一句「要现在去生成配图吗？」** —— 点「去生成配图」会直接跳到详情页的配图面板；
+   点「先不看」就正常进详情页（这一步只影响停在哪个 tab，不影响生成结果）
+7. 生成完会自动跳到文章详情页，你能看到正文、引用来源、风险提示
+
+**接下来还能做两件事：**
+
+| 想做什么 | 去哪儿 | 说明 |
+| --- | --- | --- |
+| 生成配图 | 详情页右侧的「配图」面板 | 按模型的配图建议**逐条**生成（一张 30~90 秒），可以设封面、改图注、改插入位置、删掉重来 |
+| 推到公众号 | 详情页页头的「推送到公众号草稿箱」 | **必须先有至少一张配图**（公众号草稿必须有封面），没有时按钮是灰的并会告诉你为什么 |
+
+推完之后去**公众号后台 → 草稿箱**，能看到这篇文章（含正文插图和封面）。
+**在手机上确认没问题后再手动点发布** —— 系统永远不会替你发。
 
 如果想看 Agent 到底做了什么，回到首页看「最近的运行」，
 里面能看到每一次工具调用的参数和结果预览。
+
+> 本地开发时，图片由 Django 自己托管（`DEBUG=True` 时的 `/media/` 兜底路由），
+> 不需要 nginx，也不需要跑 Docker。
 
 ---
 
@@ -329,6 +380,42 @@ npm run dev
 | `SEARCH_BASE_URL` | 一般留空，自动用各家默认地址。**切换 provider 时记得清空**，否则会把请求打到上一家的地址上（代码里有防呆，配错会忽略并打日志） |
 | `DB_ENGINE` | `mysql` 或 `sqlite`，见下 |
 | `DJANGO_SECRET_KEY` | 生产环境必须换成随机字符串 |
+
+### AI 配图（不填不影响生成文章，只影响配图）
+
+**文生图走的是 OpenAI 兼容接口**，所以任何兼容 OpenAI 的中转站 / 官方 API 都能用。
+
+| 变量 | 说明 |
+| --- | --- |
+| `IMAGE_API_KEY` | 生图服务的密钥 |
+| `IMAGE_BASE_URL` | 生图服务的地址，例如 `https://<中转站域名>/v1`。**代码刻意不回退到 OpenAI 官方地址** —— 中转站和官方的模型名、计费都不一样，猜错了只会让你收到一个看不懂的 404 |
+| `IMAGE_MODEL` | 模型名，照中转站实际提供的名字填（例如 `gpt-image-1`、`dall-e-3`） |
+| `IMAGE_SIZE` | 出图尺寸，默认 `1024x1536`（竖图，适合公众号） |
+| `IMAGE_QUALITY` | `low` / `medium` / `high`，默认 `medium` |
+| `IMAGE_OUTPUT_FORMAT` | `jpeg` 或 `png`，默认 `jpeg` |
+| `IMAGE_TIMEOUT` | 单张图的超时秒数。生图比生文慢得多，默认 `300`（前端也是 300 秒，正好对齐） |
+| `IMAGE_STYLE_PROMPT` | **统一画风提示词**。会拼在每条配图建议前面，用来让整篇文章的图风格一致 |
+| `IMAGE_MAX_PER_ARTICLE` | 单篇文章最多几张配图，默认 `8` |
+| `IMAGE_DAILY_QUOTA_PER_USER` | 每人每天最多生成几张，`0` = 不限制 |
+| `IMAGE_DAILY_QUOTA_GLOBAL` | 全站每天最多生成几张，`0` = 不限制 |
+
+> **上面三个 `IMAGE_*` 只要缺一个，配图功能会退化成一个「未配置」的中文提示，
+> 而不会让服务崩掉** —— 生成文章这条主链路完全不依赖配图。
+> 但**每日额度建议一定要设**：生图按张计费，比生文贵得多（见 12.5）。
+
+### 推送到公众号（不填 = 推送按钮报「未配置」）
+
+| 变量 | 说明 |
+| --- | --- |
+| `WECHAT_APP_ID` | 公众号后台 → 开发 → 基本配置里的 AppID |
+| `WECHAT_APP_SECRET` | 同一页的 AppSecret。**这个泄露等于公众号被人接管**，只放服务器上 |
+| `WECHAT_TIMEOUT` | 调微信接口的超时秒数，默认 `30`（上传图片比取 token 慢） |
+| `WECHAT_AUTHOR` | 草稿里的「作者」一栏，一般填你的公众号名 |
+
+> ★ 还需要在公众号后台做两件**微信侧**的配置，代码这边无能为力：
+> **① 把服务器公网 IP 加进「IP 白名单」**（否则微信返回 `40164`）；
+> **② 确认接口权限里有「草稿箱」**（已认证订阅号默认就有）。
+> 详见 12.11 的排查表。
 
 ### 关于联网搜索
 
@@ -481,6 +568,55 @@ SEARCH_BASE_URL=                # ★ 一定要清空这行
 
 记录每一轮对话。`Message.message_type` 区分 `text` / `tool_call` / `tool_result` / `article`。
 
+### `imaging_generatedimage` —— 一张 AI 配图
+
+| 字段 | 说明 |
+| --- | --- |
+| `id` | UUID 主键。**这个 id 本身就是一条访问凭据**，见下 |
+| `article_id` / `user_id` | 属于哪篇文章、哪个人（冗余一份 user 是为了每日额度统计不用 join） |
+| `suggestion_index` / `suggestion` | 来自文章的第几条配图建议、建议原文 |
+| `prompt` / `revised_prompt` | **实际**发给生图模型的提示词、模型改写后的版本 |
+| `status` | `pending` / `running` / `succeeded` / `failed` |
+| `image_file` | 图片在 `MEDIA_ROOT` 下的相对路径，形如 `images/2026/09/<32位uuid4>.jpg` |
+| `content_type` / `width` / `height` / `byte_size` | 图片元信息（宽高读不出来时是 NULL，不阻断流程） |
+| `caption` | 图注 |
+| `anchor_index` / `sort_order` | 插在第几个 `## ` 小节之后、同位置的先后顺序 |
+| `is_cover` | 是否作为公众号封面（**每篇最多一张**，由服务层保证） |
+| `provider` / `model_name` / `duration_ms` | 排查用 |
+| `wechat_url` | 上传到微信后拿到的 `mmbiz.qpic.cn` 地址。★ 微信**不允许正文图外链**，所以传过一次就存下来复用 |
+| `error_message` | 失败时的中文提示 |
+
+> **图片不在数据库里，在磁盘上。** 具体落在 Docker 命名卷 `uploads`，
+> 生产由 nginx 直接发 `/media/`。**这意味着备份要连卷一起打包**，见 12.9。
+>
+> ★ **取图路径的安全性**：文件名里是一段**独立于主键**的 uuid4。
+> 这不是随手加的随机数，而是这条链路上**唯一的访问控制** ——
+> 浏览器的 `<img src>` 带不了 `Authorization` 头，取图接口只能是公开的，
+> 所以「路径猜不出来」就是全部的安全性。刻意不把记录 id 编进路径。
+
+### `wechat_wechatpublish` —— 一次「推送到公众号草稿箱」
+
+| 字段 | 说明 |
+| --- | --- |
+| `id` | UUID 主键 |
+| `article_id` / `user_id` | 推的哪篇、谁推的 |
+| `status` | `running` / `succeeded` / `failed` |
+| `action` | `add`（新建草稿）/ `update`（更新草稿） |
+| `media_id` | 微信草稿 id。**只有成功的那次才写** —— 下次推送靠它走 `draft/update` |
+| `content_html` | 本次**真正发出去的那份** HTML 快照 |
+| `title` / `image_count` | 标题、这次带了几张正文图 |
+| `error_code` / `error_message` | 微信原始的 errcode 和中文说明（`40164` 白名单、`48001` 没权限…） |
+
+> **为什么要一条条存，而不是在 `article` 上放两个字段？**
+>
+> 1. 用户会**反复推**（改一版推一次），只存最后一次就查不到「上次到底推没推成功」；
+> 2. 微信的错误信息很有价值，存下来才能在界面上直接告诉用户上次为什么失败；
+> 3. 存了 `media_id` 才能做到「再推一次是**更新同一份草稿**，不是又新建一份」。
+>
+> `content_html` 存快照是因为**公众号的渲染和浏览器差得很远**。
+> 用户说「排版乱了」时，必须能拿到当时真正发出去的那份 HTML ——
+> 用现在的文章内容重新渲染一遍是没用的，文章可能已经被改过了。
+
 ---
 
 ## 八、接口文档
@@ -530,6 +666,33 @@ SEARCH_BASE_URL=                # ★ 一定要清空这行
 | PATCH | `/articles/{id}` | 编辑文章 |
 | DELETE | `/articles/{id}` | 归档（软删除） |
 | GET | `/articles/{id}/sources` | 这篇文章引用的来源 |
+| GET | `/articles/{id}/images` | 这篇文章的配图列表（含 `section_count`：正文有几个 `## ` 小节，前端靠它画插入位置） |
+| **POST** | **`/articles/{id}/images`** | **★ 生成一张配图（同步，一张 30~90 秒）** |
+| PATCH | `/images/{image_id}` | 改图注 / 改插入位置 / 设为封面 |
+| DELETE | `/images/{image_id}` | 删掉这张配图（**磁盘上的文件一起删**） |
+| GET | `/images/{image_id}/file` | 兜底取图（正常图片走 `/media/` 由 nginx 直发，这条只用于排查） |
+| **POST** | **`/articles/{id}/wechat-publishes`** | **★ 推送到公众号草稿箱（同步，含上传图片）** |
+| GET | `/articles/{id}/wechat-publishes` | 推送历史（**不含** `content_html`，最新在前） |
+| GET | `/wechat-publishes/{publish_id}` | 单次推送详情（**含** `content_html` 快照） |
+
+**配图接口的三个要点：**
+
+1. **POST 是同步的**，一张图 30~90 秒。前端给这个接口单独设了 **5 分钟**超时 ——
+   用默认的 30 秒必定被掐断，而图其实还在生成。
+2. **PATCH `/images/{id}` 里 `is_cover=true` 会自动把同文章的其他图取消封面**，
+   不用前端先遍历一遍把别人置 false。
+3. **`anchor_index` 超出范围直接 400**（合法范围 `0 ~ section_count`），
+   而不是被悄悄夹到边界上 —— 静默纠正会让「图跑到别的小节下面」变成一个查不出来的 bug。
+
+**推送接口的两个要点：**
+
+1. **这篇文章必须有至少一张 `succeeded` 的配图，否则 400。**
+   微信的 `draft/add` 要求 `thumb_media_id`（封面）必填，没有封面图**根本推不出去**。
+   与其让它到微信那边失败、返回一个看不懂的错误码，不如在这里就说清楚要做什么。
+   → 前端在没有配图时应该**直接禁用按钮并说明原因**，而不是等报错。
+2. **重复推送默认是「更新同一份草稿」**，草稿箱里始终只有一份 ——
+   用户「改一版推一次」不会攒出一堆重复草稿。
+   上一次的草稿如果被你在后台删了（微信返回 `40007`），会自动退回新建一份。
 
 ### 常用错误码
 
@@ -543,10 +706,34 @@ SEARCH_BASE_URL=                # ★ 一定要清空这行
 | `MODEL_PROVIDER_ERROR` | 502 | 大模型调用失败（Key 不对 / 余额不足 / 网络不通） |
 | `STRUCTURED_OUTPUT_ERROR` | 502 | 模型没按格式返回文章 |
 | `AGENT_LIMIT_EXCEEDED` | 429 | 超过调用限制 |
+| `IMAGE_PROVIDER_ERROR` | 502 | 生图服务调用失败（没填配置 / Key 不对 / 余额不足 / 内容审核拒绝） |
+| `IMAGE_LIMIT_EXCEEDED` | 400 | 超过单篇文章的配图上限 |
+| `IMAGE_QUOTA_EXCEEDED` | 429 | 超过每日配图额度 |
+| `WECHAT_NOT_CONFIGURED` | 400 | 没填 `WECHAT_APP_ID` / `WECHAT_APP_SECRET` |
+| `WECHAT_PRECONDITION_FAILED` | 400 | 前置条件不满足（例如还没有配图） |
+| `WECHAT_PUBLISH_ERROR` | 502 | 微信返回了错误，`message` 里是**微信自己的中文说明**，原样透传 |
+
+> **两条要特别说明的：**
+>
+> - **配图「没配置」和「调用失败」是同一个码 `IMAGE_PROVIDER_ERROR`（502）。**
+>   这是刻意的：`IMAGE_API_KEY` / `IMAGE_BASE_URL` / `IMAGE_MODEL` 三个缺任何一个，
+>   服务层会退化成 `NullImageProvider` —— 它不崩，只在 `message` 里**点名缺的是哪个变量**。
+>   所以看到这条时先读 `message`，它通常已经告诉你答案了。
+> - **`WECHAT_PUBLISH_ERROR` 里是微信自己的原话。**
+>   微信的报错（`40164` IP 不在白名单、`48001` 没接口权限…）
+>   都是你去公众号后台点两下就能解决的。糊成一句「推送失败」等于让你来问我们，
+>   所以这里刻意原样透传。
 
 ---
 
 ## 九、两个核心工具
+
+> **注意「工具」在这里是个专门的词**：它指的是**模型自己能决定要不要调用**的东西。
+> 全项目只有下面这两个 —— 它们由 LLM 在推理过程中自主发起。
+>
+> **配图和推送公众号不是工具**，是普通的 REST 接口，由**你点按钮**触发。
+> 这个区别是有意的：让模型自己决定「要不要花钱生成一张图」，
+> 既不可控也不好排查，而且很容易在循环里把额度烧光。
 
 ### `web_search` —— 联网搜索
 
@@ -658,6 +845,38 @@ URL 安全校验      → 防 SSRF，只允许 http/https，禁内网
 即使你说「帮我写文章并直接发布」，V1 也只会生成草稿然后回一句
 **「文章已生成草稿，等待用户确认」**。这条是产品红线，不是配置项。
 
+**推送到公众号沿用了同一条红线**：调用的接口是 `draft/add` / `draft/update`，
+只**建草稿**，永远不碰 `freepublish`。草稿建好之后，
+必须由你在公众号后台（手机上也行）人工确认后点发布。
+
+> 这不是我们偷懒 —— 个人主体订阅号从 2025-07 起在 API 层面就拿不到
+> `freepublish/submit` 的权限了。**产品红线和平台限制正好指向同一个做法。**
+
+### 9. 配图的路径就是访问凭据
+
+浏览器的 `<img src>` **带不了 `Authorization` 头**，所以取图接口只能是公开的。
+这条链路上唯一的访问控制就是「路径猜不出来」：
+
+- 文件名里是一段**独立于主键**的 uuid4（`images/2026/09/<32位>.jpg`）
+- **刻意不把记录 id 编进路径** —— 那样一旦有人为了 admin 方便把主键换成
+  自增或时间有序的 UUID，整个 media 目录就同时变成可枚举的，**而且不会有任何报错**，
+  也不会有任何测试变红
+- `/media/` 和网站**同源**，所以扩展名走白名单（`.svg` / `.html` 一律改写成 `.jpg`）——
+  否则往那个目录里塞一个 `<script>` 就是一个存储型 XSS
+
+### 10. AppSecret 和 API Key 一样对待
+
+`WECHAT_APP_SECRET` 泄露等于公众号被人接管。所以它：
+
+- 只在服务器 `.env` 里（`chmod 600`），**永远不进 Git**
+- 只在后端使用，**前端拿不到**（前端只发一个「请推送」的请求）
+- 不进日志、不进任何 API 响应
+
+`access_token` 也一样：用 `/cgi-bin/stable_token` 在服务端取，
+**绝不缓存到前端**，也绝不花钱买「中控服务器」——
+多 worker 下老的 `/cgi-bin/token` 会互踢导致偶发 `40001`，
+`stable_token` 就是微信为这个问题提供的正解。
+
 ---
 
 ## 十一、跑测试
@@ -668,10 +887,10 @@ cd backend
 # .venv/bin/python -m pytest              # macOS / Linux
 ```
 
-测试**完全离线**，不需要 API Key，不花钱，大约 4 秒跑完。
+测试**完全离线**，不需要 API Key，不花钱，大约 10 秒跑完。
 
 ```
-175 passed
+271 passed
 ```
 
 覆盖内容：
@@ -682,13 +901,26 @@ cd backend
 | `test_tools.py` | 44 | 两个工具的成功/失败/超时/体积限制/重定向到内网/正文提取；两个搜索 Provider 的错误码翻译、语言参数、provider 选择与防呆 |
 | `test_source_registry.py` | 22 | 防伪造来源、URL 归一化、去重 |
 | `test_agent_service.py` | 27 | **端到端**：真实 LangChain 循环 + 假模型 + 假搜索；每日额度（单人 / 全站 / 跨零点重置） |
-| `test_api.py` | 45 | 接口、参数边界、越权访问、错误信封；关闭注册、额度 429、限流文案是中文 |
+| `test_api.py`（agent） | 45 | 接口、参数边界、越权访问、错误信封；关闭注册、额度 429、限流文案是中文 |
+| `imaging/test_storage.py` | 16 | **配图落盘**：文件真的写进 `MEDIA_ROOT`、路径里是独立 uuid4、扩展名白名单（`.svg`/`.html` 被打回 `.jpg`）、删记录和级联删文章都会删文件、文件丢了 `read_bytes()` 返回 `b""` 而不抛异常 |
+| `imaging/test_api.py` | 32 | 配图接口：逐张生成、单篇上限、每日额度（**并断言额度挡住时生图服务一次都没被调用**）、设封面会取消其他封面、`anchor_index` 越界 400 |
+| `imaging/test_image_utils.py` | 18 | 微信图片压缩：正文图压到 1MB 以内、封面裁成 900×500 的 JPG 且 ≤64KB、RGBA 透明区铺**白**底 |
+| `wechat/test_api.py` | 30 | 推送草稿箱：未配置 / 没配图时的中文引导、正文图**上传一次后复用**、重复推送走 `draft/update`、草稿被删（`40007`）自动退回新建、微信原始错误码原样透传、历史列表**不含** `content_html` |
 
 **怎么做到不花钱的？** 见 `apps/agent/tests/fakes.py`：
 用 `ScriptedChatModel` 按剧本回放模型的回答，但**工具调用、中间件、来源校验、
 数据库写入全部是真的**。所以测出来的可信度远高于「把所有东西都 mock 掉」。
 
+配图这条链路同理：测试里把 `get_image_provider` 换成假 provider，
+**一场测试都不许真的打中转站**；微信那边换成 `FakeWeChatClient`，
+连 `draft/add` 的请求体长什么样都能断言。
+
 而且有一个安全网：**任何测试如果忘了打桩，会立刻失败而不是偷偷去调付费大模型。**
+
+> ★ 跑测试**不会**在你本地的 `backend/media/` 里留下任何图片：
+> `settings_test.py` 把 `MEDIA_ROOT` 指到临时目录，每个用例还各自再隔离一层。
+> 这个属性是**实测过的**（跑完 271 条之后 `backend/media/` 仍然不存在），
+> 不是「应该没问题」。
 
 其他检查：
 
@@ -697,6 +929,10 @@ python manage.py check                 # 配置检查
 python manage.py makemigrations --check # 确认模型和迁移文件一致
 cd ../frontend && npm run build         # 前端类型检查 + 打包
 ```
+
+> **`makemigrations --check` 不能省。** Django 建测试库时会带 `run_syncdb=True`，
+> 也就是说**即使没有迁移文件，测试也照样全绿** —— 而生产环境
+> 跑的是 `migrate`，会真实地少一张表。这个差异只在部署那一刻才暴露。
 
 ---
 
@@ -712,7 +948,8 @@ cd ../frontend && npm run build         # 前端类型检查 + 打包
    http://<IP>          │   ├─ /                    → 前端静态文件   │
                         │   ├─ /api/ /admin/ /health/               │
                         │   │        → 反代 http://backend:8000     │
-                        │   └─ /static/             → 反代 backend   │
+                        │   ├─ /static/             → 反代 backend   │
+                        │   └─ /media/              → 命名卷 uploads │
                         └─────────────────────────────────────────┘
                                      │ 容器内网，不映射到宿主机
                         ┌────────────▼────────────────────────────┐
@@ -721,7 +958,18 @@ cd ../frontend && npm run build         # 前端类型检查 + 打包
                         ┌────────────▼────────────────────────────┐
                         │  db 容器（mysql:8.0）                     │
                         └─────────────────────────────────────────┘
+
+   命名卷：mysql_data（全部文章和账号）  uploads（全部配图）
+   ★ 两个卷都不能丢，`docker compose down -v` 会同时删掉它们，见 12.9
 ```
+
+**图片为什么要单独走一条路？**
+配图是几百 KB 的二进制。如果让 Django 来发，**每张图都要占住一个 gunicorn
+worker（只有 3×4=12 个）**，图上多一点就能把 API 请求饿死。
+交给 nginx 直接从一个只读挂载的卷里发是零成本的 —— 它还会顺手做缓存和 Range 请求。
+
+所以 `web` 容器把 `uploads` 卷以 **`:ro`（只读）** 挂到 `/var/www/media`，
+只有 `backend` 能写。这样即使 nginx 被攻破，也改不了图片。
 
 **为什么让 nginx 同时管前端和接口（同源）？**
 
@@ -860,6 +1108,29 @@ nano .env                         # 按下面的说明逐项改
 | `LLM_API_KEY` | 你的 DeepSeek Key | 生成时报「调用大模型失败」 |
 | `SEARCH_API_KEY` | 你的 Tavily Key | 能生成，但会说「未能获取到任何外部资料」 |
 
+**要用配图和推送公众号，再补这八项**（不填不影响生成文章，只影响对应功能）：
+
+| 变量 | 怎么填 | 填错的症状 |
+| --- | --- | --- |
+| `IMAGE_API_KEY` | 生图服务的 Key | 配图报「配图生成服务暂时不可用」 |
+| `IMAGE_BASE_URL` | 中转站地址，**必须带 `/v1` 结尾** | 同上（`message` 里会点名缺哪个变量） |
+| `IMAGE_MODEL` | 照中转站**实际提供**的模型名填 | 生图返回 404 / 模型不存在 |
+| `IMAGE_DAILY_QUOTA_PER_USER` | 例如 `20`。**留 0 = 不限制 = 钱包不设防** | 见下面的 12.5 |
+| `IMAGE_DAILY_QUOTA_GLOBAL` | 例如 `200`。同上 | 同上 |
+| `WECHAT_APP_ID` | 公众号后台 → 开发 → 基本配置 | 推送报「还没有配置微信公众号」 |
+| `WECHAT_APP_SECRET` | 同一页。**泄露 = 公众号被接管** | 同上 |
+| `WECHAT_AUTHOR` | 你的公众号名 | 草稿的「作者」一栏是空的（不影响推送） |
+
+> ★ **`IMAGE_BASE_URL` 结尾有没有 `/v1` 是最常见的坑。**
+> 代码用的是 OpenAI 兼容协议，路径是 `<BASE_URL>/images/generations`。
+> 少了 `/v1` 就会打到 `https://xxx/images/generations`，得到一个 404。
+> 代码**刻意不回退到 OpenAI 官方地址** —— 中转站和官方的模型名、计费都不一样，
+> 猜错了只会让你收到一个看不懂的错。
+
+> ★ **推送公众号还有一件微信侧的配置，代码这边做不到：**
+> 去公众号后台把**服务器的公网 IP 加进「IP 白名单」**。
+> 不加的话微信会返回 `40164`，而这个报错会原样显示给你看（见 12.11）。
+
 **三个最容易踩的坑，每个都单独说一遍：**
 
 **① `ALLOWED_HOSTS` 里的 `127.0.0.1` 不能删。**
@@ -910,14 +1181,40 @@ AGENT_DAILY_QUOTA_GLOBAL=200     # ★ 全站每天总上限 = 你的最坏情�
 **这两个数字就是你的钱包保险丝，按自己的心理止损线来设。**
 `0` 表示不限制。
 
+### ★ 配图是**另一本账**，必须单独设
+
+**生图比生文贵得多，而且是按张计费的。** 一篇文章 8 张图，
+每张都可能比一次文章生成还贵 —— 更别说「重新生成」是可以无限点的。
+
+配图的额度完全独立于上面那本账，数的是 `imaging_generatedimage` 表的行数：
+
+```
+IMAGE_DAILY_QUOTA_PER_USER=20    # 单人每天最多生成几张图
+IMAGE_DAILY_QUOTA_GLOBAL=200     # ★ 全站每天总上限
+IMAGE_MAX_PER_ARTICLE=8          # 单篇文章最多几张
+```
+
+**★ 这三个变量的默认值是 `0` = 不限制 = 钱包不设防。**
+它是刻意留成这样的（本地开发不该被额度烦），
+但**部署到公网时一定要设** —— 否则一个循环就能把生图额度刷光，
+而且和文章那本账是分开的，你在文章额度上设的止损线拦不住它。
+
+> 配图接口**没有加频率限流**，这是想过之后的决定：配图面板的设计就是
+> 「按配图建议逐条生成」，8 条建议 = 8 次请求，几分钟内发完。
+> 加一个按小时算的限流只会把正常用户挡在外面，
+> 而**真正能止损的是上面那本硬账本**（数数据库行数，清缓存重启都绕不过去）。
+>
+> 另外：额度挡住时是**先检查、再生图**，不会出现「钱花了但告诉你超额了」。
+
 **同时把注册关掉：**
 
 ```
 ALLOW_REGISTRATION=False
 ```
 
-开着的话，公网上的陌生人注册之后就能用**你的** `LLM_API_KEY` 生成文章，
-这钱是你出的。关掉之后账号由管理员创建（见 12.6）。
+开着的话，公网上的陌生人注册之后就能用**你的** `LLM_API_KEY` 生成文章、
+用**你的** `IMAGE_API_KEY` 生成图，这钱是你出的。
+关掉之后账号由管理员创建（见 12.6）。
 
 ---
 
@@ -970,6 +1267,8 @@ docker compose exec backend python manage.py createsuperuser
 curl -i http://localhost/health/          # 期望 200 + {"success":true}
 curl -i http://<IP>:8000/                 # 期望「连接被拒」—— 这是正确结果
 docker compose logs backend | grep -i traceback    # 期望没有任何输出
+docker compose exec backend ls /app/media            # ★ 卷挂上了没（空目录也正常，说明挂着）
+docker compose exec web ls /var/www/media            # ★ nginx 那一侧只读挂载也得有
 ```
 
 然后**必须用浏览器**（不能用 curl 代替，要验证的是 nginx + 浏览器的真实行为）：
@@ -981,11 +1280,35 @@ docker compose logs backend | grep -i traceback    # 期望没有任何输出
 | 生成一篇文章，掐表 | **2 分钟内出结果，无 504** | nginx `proxy_read_timeout` / LLM Key |
 | 连点生成按钮 | 出现**中文**「操作太频繁了，请稍后再试」 | 限流配置 |
 | 跑到单用户额度上限 | 出现「达到每日上限（20 篇）」 | 额度配置 |
+| **生成一张配图** | 图能显示出来（**不是裂图**） | 见下面那条「配图专项」 |
+| **推送到公众号草稿箱** | 提示成功，去公众号后台草稿箱能看到文章和封面 | 12.11 的 `40164` / `48001` 两行 |
 | 打开 `http://<IP>/admin/` | **404**（因为已经换路径了） | — |
 | 打开 `http://<IP>/<你的后台路径>` | 后台能登录，**CSS 正常显示** | `collectstatic` / whitenoise |
 
-最后一条特别值得做：后台 CSS 正常 = 静态文件链路（whitenoise +
-`/static/` 反代 + `collectstatic`）整条是通的。
+**最后两条特别值得做：**
+
+- 后台 CSS 正常 = 静态文件链路（whitenoise + `/static/` 反代 + `collectstatic`）整条是通的。
+- **配图能显示 = `uploads` 卷 + nginx 的 `/media/` 反代整条是通的。**
+  这一条要专门验证，因为它跨了三个组件（backend 写入 → 命名卷 → nginx 只读挂载），
+  而且**坏掉时的表现是「图片 404」而不是报错** —— 前端只会显示一个裂图，
+  页面上其它一切正常，非常容易被当成「图生成坏了」而去查生图服务。
+  F12 → Network 里看那个图片请求：**404 说明是卷或 nginx 的问题**，
+  200 但图是破的才是生图的问题。
+
+**配图专项排查（一条命令定位是哪一层断的）：**
+
+```bash
+# 1. 后端到底写进去没有？（看得到文件说明 backend + 卷是好的）
+docker compose exec backend ls -R /app/media | head -20
+# 2. nginx 那边看得到吗？（看不到 = 卷挂载写错了）
+docker compose exec web ls -R /var/www/media | head -20
+# 3. nginx 认得这条路由吗？（期望不是 404）
+curl -I http://localhost/media/<随便一个真实文件名>
+```
+
+> 第 3 步**必须用文件名真的存在的那张图**，随便编一个路径得到 404 是正常的 ——
+> 这条只能证明「nginx 把 /media/ 交给了卷」而不是「交给了 SPA 回退」
+> （回退的话会返回 `200` + 一堆 HTML）。
 
 ---
 
@@ -1006,23 +1329,85 @@ docker compose restart nginx      # ★★★ 这一行不能省
 改了前端代码时，`--build` 会重新跑一遍 Vite 构建，这一步在 2 核机器上要几分钟，
 是正常的。
 
+> **`up -d --build` 不会碰任何命名卷。** `mysql_data`（文章、账号）
+> 和 `uploads`（配图）都会原样保留，数据库迁移由容器的 entrypoint
+> 自动跑（`migrate` 在 gunicorn 启动之前）—— **不需要你手工敲 migrate**。
+>
+> **只有 `down -v` 会删卷。** 平时更新永远只用 `down`，不加 `-v`。
+
+**只改了 `.env` 的时候**，不用 `--build`（`--build` 是重建镜像，和配置无关）：
+
+```bash
+nano .env
+docker compose up -d backend      # ★ 这一句才会让新配置生效（重建容器）
+```
+
+> ★ **改 `.env` 之后不 `up -d` 是没用的。** 环境变量是在**容器创建时**
+> 注入进去的，改文件不会影响已经在跑的容器 —— 你会对着一个明明改对了的
+> `.env` 反复怀疑自己。确认新配置真的进去了（**只打印变量名，不打印值**，
+> 免得把 Key 刷到终端和你的 shell 历史里）：
+>
+> ```bash
+> docker compose exec backend printenv | grep -oE '^(IMAGE|WECHAT)_[A-Z_]+'
+> ```
+
 ---
 
 ### 12.9 备份
 
+**★★★ 备份现在是两件事，不是一件。** 只做下面第一条会**静默丢图**：
+数据库完好无损地恢复了，所有配图却全是 404 —— 而且不会有任何报错，
+你要等到打开某篇文章、发现图全裂了才会知道。
+
+#### ① 数据库（文章、账号、推送记录）
+
 ```bash
 docker compose exec -T db mysqldump -u root -p"$DB_ROOT_PASSWORD" \
   --single-transaction --default-character-set=utf8mb4 ai_content_agent \
-  | gzip > ~/backup-$(date +%F).sql.gz
+  | gzip > ~/backup-db-$(date +%F).sql.gz
 ```
 
 `--single-transaction` 保证导出的是一致性快照，**不锁表**，线上可以随时跑。
 
-放进 crontab 每天凌晨 3 点自动跑。**并且留一份到另一台机器或对象存储** ——
-备份和数据库放在同一块盘上，等于没备份。
+#### ② 配图（`uploads` 卷）
 
-> ★ **`mysql_data` 这个 volume 里存着全部文章和账号。**
-> `docker compose down -v` 会删掉它。平时更新只用 `down` 不要加 `-v`。
+```bash
+# ★ 用 docker run 起一个临时容器把卷打包出来，比去 /var/lib/docker/volumes/
+#   里翻路径靠谱得多 —— 那个路径在不同发行版和不同 Docker 版本上并不一致。
+docker run --rm \
+  -v agent_ai_biaoshu_uploads:/data:ro \
+  -v "$HOME:/backup" \
+  alpine tar czf /backup/backup-media-$(date +%F).tar.gz -C /data .
+```
+
+> 卷名默认是 `<compose 项目名>_uploads`。项目名就是目录名，
+> 用 `docker volume ls | grep uploads` 确认一下，**名字不对 tar 会打出一个空包
+> 而且退出码还是 0** —— 这是最阴的一种失败。
+
+#### 两个一起放进 crontab
+
+```cron
+0 3 * * *  cd /path/to/agent_ai_biaoshu && docker compose exec -T db mysqldump ... | gzip > ~/backup-db-$(date +\%F).sql.gz
+30 3 * * * docker run --rm -v agent_ai_biaoshu_uploads:/data:ro -v "$HOME:/backup" alpine tar czf /backup/backup-media-$(date +\%F).tar.gz -C /data .
+```
+
+**并且把两份都留一份到另一台机器或对象存储** ——
+备份和原始数据放在同一块盘上，等于没备份（服务器被删库 / 挂盘，两份一起没）。
+
+#### 恢复（真的演练一次，别等到出事才第一次用）
+
+```bash
+gunzip -c ~/backup-db-2026-09-15.sql.gz | docker compose exec -T db mysql -u root -p"$DB_ROOT_PASSWORD" ai_content_agent
+docker run --rm -v agent_ai_biaoshu_uploads:/data -v "$HOME:/backup" alpine tar xzf /backup/backup-media-2026-09-15.tar.gz -C /data
+```
+
+> ★ 恢复配图时**不要加 `:ro`**（要写进去）。
+> 而且 tar 解包会**覆盖同名文件但不会删掉多余文件** ——
+> 如果你是在一个已经跑过一段时间的卷上恢复，先清空再解包更干净。
+
+> ★ **两个卷都不能丢：`mysql_data` 存着全部文章和账号，`uploads` 存着全部配图。**
+> **`docker compose down -v` 会把它们一起删掉。** 平时更新只用 `down`，不要加 `-v`。
+> 这条以前只写了一半（只提了 `mysql_data`），现在配图也在卷里了，代价翻了倍。
 
 ---
 
@@ -1080,6 +1465,29 @@ docker compose exec db mysql -u root -p -e "SHOW DATABASES;"   # 数据库通不
 | 后台登录 403 | `CSRF_TRUSTED_ORIGINS` 少了 `http://` 前缀 |
 | `Access denied for user` | 密码里有 `$` 被 compose 吃掉了 |
 | 能生成但说「未能获取外部资料」 | `SEARCH_API_KEY` 没填 |
+| 配图一张都生不出来，提示「服务暂时不可用」 | `IMAGE_API_KEY` / `IMAGE_BASE_URL` / `IMAGE_MODEL` 有一个是空的（`message` 里会点名是哪个） |
+| 生图返回 404 或「模型不存在」 | `IMAGE_BASE_URL` 少了 `/v1` 结尾，或者 `IMAGE_MODEL` 不是中转站实际提供的名字 |
+| 生图提示 401 / 余额不足 | `IMAGE_API_KEY` 不对，或者**中转站账户余额没了**（和 LLM 的余额是两个账户） |
+| 配图生成很慢后超时 | `IMAGE_TIMEOUT` 太小（默认 300 秒）。生图比生文慢得多，一张 30~90 秒是常态；如果确实要调大，**前端的 `IMAGE_GENERATE_TIMEOUT` 和 nginx 的 `proxy_read_timeout` 也要一起调**，否则只是把超时点往后挪了一层 |
+| **图片生成成功但页面上全是裂图** | ① `uploads` 卷没挂上（`docker compose exec backend ls /app/media`）；② nginx 没重启（`docker compose restart nginx`）；③ 浏览器缓存了旧的 404 —— 强刷一次 |
+| 文章详情页按 F5 变 404 | `nginx.conf` 里 `/media/` 那条 `location` 没写，图片请求掉进了 SPA 的 `try_files ... /index.html` 回退 |
+| **推送报 `40164`** | ★ **服务器公网 IP 不在公众号的「IP 白名单」里**。去公众号后台 → 开发 → 基本配置 → IP 白名单 加上。这是微信侧的硬性配置，代码改不了。报错原文会原样显示给你 |
+| 推送报 `48001` / `api unauthorized` | 公众号没有「草稿箱」接口权限。已认证订阅号默认有；**未认证的个人号拿不到**，这就是推不出去的原因 |
+| 推送报 `40001` / `invalid credential` | 多个进程在抢 `access_token`。本项目用的是 `/cgi-bin/stable_token`（就是微信为这个问题提供的），出现这条说明 `WECHAT_APP_SECRET` 可能填错了 |
+| 推送报「还没有配图，无法推送」 | 不是 bug，是正常拦截 —— 公众号的草稿**必须有封面图**。先去配图面板生成至少一张 |
+
+**推送相关的几个常见疑问：**
+
+- **上一次的草稿被我在公众号后台删了怎么办？** 不用管。
+  微信返回 `40007` 时系统会自动退回「新建一份草稿」，而不是报错。
+- **重复推送会不会在草稿箱里攒出一堆重复草稿？** 不会。
+  默认行为是**更新同一份**草稿。想强制新建，API 支持传 `force_new: true`
+  （前端暂未暴露这个开关 —— 有了上面那条 `40007` 兜底，它基本用不上）。
+- **删了配图记录，磁盘上的文件还在吗？** 会一起删掉，删文章级联删图也会。
+  这是 `FileField` 的经典坑：**默认只删数据库记录，不删文件** ——
+  不管的话 `media/` 会随着「重新生成 → 删掉不满意的」无限膨胀，
+  而数据库里一条记录都没有，谁也不知道那些文件还有没有用。
+  本项目用 `post_delete` 信号兜住了。
 
 > **还有一个只在 Windows 上会遇到的坑**：如果你在 **Git Bash** 里手工执行
 > `VITE_API_BASE_URL=/api/v1 npm run build`，MSYS 的路径转换会把 `/api/v1`
@@ -1136,6 +1544,48 @@ A：这是模型自己的判断。如果搜索结果里的摘要已经足够，�
 这本身是合理行为，System Prompt 里也是这么教它的。想让它读得更勤，
 可以在「补充要求」里写「请打开原文核实具体数据」。
 
+**Q：配图一直转圈，是不是卡住了？**
+A：正常。**生图比生文慢得多，一张 30~90 秒是常态**，比等文章还久。
+前端给这个接口单独设了 5 分钟超时（默认的 30 秒必定被掐断）。
+注意配图是**逐张串行**生成的，8 张就是好几分钟 —— 这是刻意的，
+并发打中转站很容易触发限流，而且失败的图会白花钱。
+
+**Q：配图报「配图生成服务暂时不可用」**
+A：先读这句话后面的括号 —— **它会点名缺的是哪个变量**
+（生图服务未配置时是这个提示，不是服务器坏了）。
+三个变量缺任何一个都会这样：`IMAGE_API_KEY`、`IMAGE_BASE_URL`、`IMAGE_MODEL`。
+都填了还报，就依次查 Key 对不对、中转站余额够不够、模型名是不是中转站真的提供。
+
+**Q：生成的图和我想要的不一样 / 画风乱七八糟**
+A：**`IMAGE_STYLE_PROMPT` 决定整体画风** —— 它是拼在每条配图建议前面的，
+所以是让一篇文章里几张图风格统一的关键。这是目前唯一能在界面外调的旋钮。
+（后端接口支持传自定义 `prompt` 覆盖建议原文，但**前端面板还没暴露这个输入框**。）
+另外生图模型的提示词理解能力差异很大，同一个词在不同模型上出图可能完全不同 ——
+换个模型试试往往比反复调词有效。
+
+**Q：图片生成成功了，但页面上是裂图**
+A：**几乎都是部署环境的问题，不是生图的问题。**
+F12 → Network 里看那个图片请求：
+**404 = 图没到 nginx**（`uploads` 卷没挂上，或者 nginx 没重启）；
+**200 但图是破的**才是生图本身的问题。
+12.7 有专门的「配图专项排查」三条命令，照着跑一遍就能定位。
+
+**Q：推送到公众号报 `40164`**
+A：**服务器公网 IP 不在公众号的 IP 白名单里。**
+去公众号后台 → 开发 → 基本配置 → IP 白名单，把服务器 IP 加上。
+这是微信侧的硬性配置，代码改不了，也没有绕过的方法。
+（我们会把微信的原话原样显示给你，就是为了让你一眼知道该去做什么。）
+
+**Q：推送到公众号报 `48001` / `api unauthorized`**
+A：公众号没有「草稿箱」这个接口的权限。**已认证的订阅号默认有**，
+未认证的个人号拿不到 —— 这是平台限制，不是配置问题。
+
+**Q：为什么推送按钮是灰的？**
+A：因为这篇文章还没有配图。**公众号的草稿必须有封面图**，
+微信的 `draft/add` 接口里 `thumb_media_id` 是必填的 ——
+没有配图**根本推不出去**。先去配图面板生成至少一张，按钮就会变成可点。
+鼠标停在灰按钮上会告诉你原因。
+
 ---
 
 ## 十四、V1 没做的事
@@ -1144,18 +1594,33 @@ A：这是模型自己的判断。如果搜索结果里的摘要已经足够，�
 
 - ❌ 多 Agent 协作、MCP、RAG 向量库
 - ❌ Redis / Celery / 微服务 / K8s（生成是同步的，链路最短最好调试）
-- ❌ **自动发布到微信公众号**（这需要公众号的开发者权限，且风险太高，永远应该人工确认）
-- ❌ AI 配图 / 视频生成
+- ❌ **自动发布到微信公众号** —— ★ 这一条**永远不会做**，不是「还没排上」。
+  现在做的是**推送到草稿箱**，发布那一下必须由人在公众号后台点。
+  这条是产品红线，也是平台限制（个人主体订阅号 2025-07 起拿不到
+  `freepublish/submit` 权限），两者正好指向同一个做法。
+- ❌ 视频生成、**文生图的「改图 / 重绘」**（现在只能重新生成一张，不能局部修改）
 - ❌ 小红书 / 抖音等多平台分发
 - ❌ 复杂权限、团队协作、付费系统
 
+**已经做完的（原计划里没有，后来加的）：**
+
+- ✅ **AI 配图** —— 封面图 + 正文插图，走 OpenAI 兼容中转站，生成与否由你决定
+- ✅ **推送到公众号草稿箱** —— 正文图会自动压到 1MB 以内、封面裁成 900×500，
+  重复推送是更新同一份草稿
+
 **V1.1 可以考虑的方向**（按性价比排序）：
 
-1. **SSE 流式推送** —— 现在 POST 要等 30~120 秒，改成流式能看到「正在搜索…正在读第 2 个网页…」
-2. **异步任务化** —— 接 Celery 或 Django 的 background task，请求立刻返回，前端轮询/订阅进度
+1. **SSE 流式推送** —— 现在 POST 要等 30~120 秒（配图一张还要再加 30~90 秒），
+   改成流式能看到「正在搜索…正在读第 2 个网页…正在画第 3 张图…」
+2. **异步任务化** —— 接 Celery 或 Django 的 background task，请求立刻返回，前端轮询/订阅进度。
+   ★ 配图是**同步生成**的，一篇文章 8 张图就是 8 次串行请求，
+   这是目前最该异步化的一处
 3. **LangGraph 化** —— 把「大纲人工确认 → 写作 → 事实核查」做成固定流程图，让用户在中途介入
-4. **多平台适配** —— 小红书/抖音的文案风格差异很大，可以在 Prompt 层加平台模板
+4. **多平台适配** —— 小红书/抖音的文案风格差异很大，可以在 Prompt 层加平台模板。
+   `wechat_publishes` 这张表刻意叫了平台前缀，就是为了那天不用改表名
 5. **来源可信度评分** —— 按域名给来源打分，优先引用权威来源
+6. **配图的工作台化** —— 现在只能逐条按建议生成，将来可以支持自定义提示词、
+   局部重绘、从图库选图
 
 ---
 

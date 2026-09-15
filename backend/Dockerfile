@@ -47,9 +47,13 @@ COPY . .
 #   带着 \r 的脚本在 Linux 里会报 "/bin/sh^M: bad interpreter: No such file or directory"，
 #   这个报错完全指不出真正的原因，能查很久。
 #   仓库根的 .gitattributes 已经声明了 *.sh 用 LF，这里再兜一次底。
+# ★ mkdir media 不是多余的：Docker 在挂载命名卷时，如果镜像里目标路径
+#   已经存在，会把**那个目录的属主和权限**复制到卷上；不存在的话
+#   卷的根目录归 root 且权限取决于默认值。显式建出来，
+#   让卷第一次创建时就有确定的属主（容器是 root 跑的，nginx 只读没问题）。
 RUN sed -i 's/\r$//' entrypoint.sh \
     && chmod +x entrypoint.sh \
-    && mkdir -p /app/staticfiles
+    && mkdir -p /app/staticfiles /app/media
 
 EXPOSE 8000
 

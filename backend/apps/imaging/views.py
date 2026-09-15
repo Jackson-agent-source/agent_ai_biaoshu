@@ -6,7 +6,11 @@
     POST   /api/v1/articles/<article_id>/images   生成一张（同步，30~90 秒）
     PATCH  /api/v1/images/<image_id>              改图注/位置/顺序/封面
     DELETE /api/v1/images/<image_id>              删除
-    GET    /api/v1/images/<image_id>/file         取图片二进制（AllowAny，见下）
+    GET    /api/v1/images/<image_id>/file         取图片二进制（兜底，见下）
+
+★ 图片本体的**正常**获取路径是 /media/...（nginx 从共享卷直发）。
+  上面最后那条 /file 路由是**兜底**，不是主路径 —— 具体原因写在
+  ImageFileView 的 docstring 里。
 
 所有写操作都强制带 user=request.user 或校验文章归属，
 别人的文章一律 404（而不是 403）—— 连"这个 id 存不存在"都不泄露。
@@ -16,7 +20,7 @@ from __future__ import annotations
 
 import logging
 
-from django.http import HttpResponse
+from django.http import FileResponse, HttpResponse
 from django.shortcuts import get_object_or_404
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -140,38 +144,59 @@ class ImageDetailView(APIView):
 
 
 class ImageFileView(APIView):
-    """GET /api/v1/images/<image_id>/file —— 返回图片二进制。
+    """GET /api/v1/images/<image_id>/file —— 兜底取图接口。
 
-    ★★ 这个接口是 AllowAny，这是**刻意**的，不是忘了加权限。★★
+    ★★ 正常路径不走这里。★★
+
+        图片由 nginx 从共享卷直接发（frontend/nginx.conf 的
+        `location ^~ /media/`），序列化器返回的 file_url 也是那个地址。
+        这条路由存在的唯一意义是：当 /media/ 因为卷没挂上、nginx 路由写错
+        而 404 时，还有一个**不依赖任何部署配置**的取图入口，
+        能在不重新构建镜像的前提下确认"图还在，只是 nginx 那条路不通"。
+        排查完就该走 /media/，不要为这个接口做任何优化。
+
+    ★★ 它是 AllowAny，这是**刻意**的，不是忘了加权限。★★
 
         浏览器的 <img src="..."> 请求**不会带 Authorization 头** ——
         这是浏览器行为，不是我们能改的。所以它没法用 Token 鉴权。
         可选方案只有两个：
             a) 短时效签名 URL（要引入签名逻辑 + 前端配合刷新）
             b) 不可猜的 UUID 路径 + AllowAny
-        V1 选了 b：
+        选了 b：
             · id 是 uuid4，猜不出来（不是自增 id，也不是 uuid1）
             · 这些图是 AI 按配图建议生成的插画，本身不含任何用户隐私
             · 它们**最终就是要公开发到公众号上的**
             · 文章的标题和正文不会因此暴露 —— 这个接口只返回图片字节
         另外加了 X-Robots-Tag: noindex，避免被搜索引擎收录。
 
-    缓存：一条记录的 data 一旦写入就不再改动（重新生成是**新建**一条记录），
-    所以按 UUID 永久缓存是安全的。
+    缓存：一条记录的文件一旦写入就不再改动（重新生成是**新建**一条记录 +
+    新文件名），所以按 UUID 永久缓存是安全的。
     """
 
     permission_classes = [AllowAny]
     authentication_classes = []  # 明确不接受认证，省掉一次没意义的 Token 查询
 
     def get(self, request: Request, image_id) -> HttpResponse:
-        image = GeneratedImage.objects.filter(id=image_id).exclude(data=None).first()
+        # exclude(image_file="") 而不是 exclude(image_file=None)：
+        # FileField 的空值是空串不是 NULL（见 models 里的说明）。
+        image = GeneratedImage.objects.filter(id=image_id).exclude(image_file="").first()
         if image is None:
             # 不区分"不存在"和"没有图片"，避免变成一个 id 探测接口
             return HttpResponse(status=404)
 
-        response = HttpResponse(
-            bytes(image.data), content_type=image.content_type or "image/jpeg"
-        )
+        try:
+            handle = image.image_file.open("rb")
+        except (FileNotFoundError, OSError, ValueError):
+            # 库里有记录、磁盘上没文件（卷丢了、被手工删了）。
+            # 这里给 404 而不是 500 —— 对调用方来说就是"这张图取不到"。
+            logger.warning(
+                "配图文件缺失 image_id=%s name=%s", image.id, image.image_file.name
+            )
+            return HttpResponse(status=404)
+
+        # 用 FileResponse 而不是 HttpResponse(read())：前者流式发送，
+        # 不会把一张 3MB 的图整个读进内存。
+        response = FileResponse(handle, content_type=image.content_type or "image/jpeg")
         response["Cache-Control"] = "public, max-age=31536000, immutable"
         # 不被搜索引擎收录（地址已经是不可猜的，这只是再加一道）
         response["X-Robots-Tag"] = "noindex, noimageindex"

@@ -25,8 +25,9 @@ urlpatterns = [
         name="article-images",
     ),
     path("images/<uuid:image_id>", ImageDetailView.as_view(), name="image-detail"),
-    # ★ /file 必须放在 images/<uuid:image_id> **之后**也不会冲突 ——
-    #   因为 Django 的 <uuid:...> 转换器不会匹配到 "file" 这种非 uuid 的字符串，
-    #   所以顺序在这里无所谓。仍然显式写在后面，读起来顺。
+    # ★ 兜底取图接口。正常的图片地址是 /media/...（nginx 直发），
+    #   这条只在排查"图 404 了是不是 nginx 配错了"时用，见 ImageFileView。
+    # ★ 顺序无所谓：Django 的 <uuid:...> 转换器不会匹配到 "file" 这种
+    #   非 uuid 的字符串，和上面那条不会打架。写在后面只是读起来顺。
     path("images/<uuid:image_id>/file", ImageFileView.as_view(), name="image-file"),
 ]

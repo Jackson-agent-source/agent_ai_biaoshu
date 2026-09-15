@@ -39,6 +39,35 @@ def reset_throttle_cache():
     cache.clear()
 
 
+@pytest.fixture(autouse=True)
+def isolated_media_root(tmp_path, settings):
+    """每个测试用一个独立的临时目录当 MEDIA_ROOT。
+
+    ★ 为什么必须 autouse（而不是只在配图测试里按需用）：
+      配图是 FileField，任何**跑到生成配图**的测试都会真的往磁盘写文件。
+      将来某个 Agent 测试顺手建一张 GeneratedImage，就会写进
+      settings_test.py 里那个 session 级目录 —— 那还好；
+      真正危险的是万一哪天那个覆盖被改掉或被绕过，写进去的就是**真实的
+      backend/media/**，而且是完全静默的（.gitignore 把它挡得严严实实，
+      不报错、没人发现）。
+
+    ★ 顺带解决用例之间的互相干扰：测「删记录要连文件一起删」的时候，
+      如果所有用例共用一个目录，断言"目录空了"就会看到别人留下的文件。
+
+    ★ 不需要手工恢复 MEDIA_ROOT —— settings fixture（pytest-django 提供）
+      会在用例结束后把改动还原。
+
+    ★★ 这里有个必须实测才敢信的细节：Django 的 FileSystemStorage 把
+       location 缓存成了 cached_property，所以"改了 settings 但 storage 还用
+       旧路径"是这类 fixture 最经典的暗坑 —— 表现是**断言全过，但文件仍然
+       落在真实 media/ 里**。已经确认 Django 5.2.17 的 FileSystemStorage
+       监听了 setting_changed 信号、缓存会被一起清掉，所以这个写法是有效的。
+       如果以后升级 Django 后有人发现 media/ 又开始变脏，先来验证这一条。
+    """
+    settings.MEDIA_ROOT = str(tmp_path)
+    return tmp_path
+
+
 @pytest.fixture
 def user(db):
     """一个普通测试用户。"""

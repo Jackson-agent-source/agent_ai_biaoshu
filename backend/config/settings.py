@@ -189,6 +189,8 @@ INSTALLED_APPS = [
     "apps.conversations",
     "apps.agent",
     "apps.articles",
+    "apps.imaging",  # AI 配图（文生图）
+    "apps.wechat",  # 微信公众号草稿箱
 ]
 
 MIDDLEWARE = [
@@ -299,6 +301,21 @@ USE_TZ = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
+# ---- 配图（用户上传/生成的媒体文件）----
+# ★ 加了这两行**不需要**再动下面的 STORAGES：
+#   STORAGES["default"] 本来就是 FileSystemStorage，而它读的正是 MEDIA_ROOT /
+#   MEDIA_URL，加这两行就自动生效。多改反而会和 whitenoise 的 staticfiles 打架。
+#
+# ★ MEDIA_URL 用**绝对路径** /media/（而 STATIC_URL 是相对的 "static/"）：
+#     生产：nginx 用 location ^~ /media/ 从共享卷直接发，请求不进 Django
+#     开发：DEBUG=True 时 config/urls.py 用 static() 兜住，
+#           再由 frontend/vite.config.ts 的 proxy 把 /media 转给 :8000
+#   两端拿到的是**同一个字符串**，所以序列化器里的 file_url 不需要任何环境判断。
+#
+# ★ BASE_DIR / "media" 正好命中根 .gitignore 里已有的 /backend/media/，不用改它。
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
 # Django 4.2+ 用 STORAGES 取代了旧的 STATICFILES_STORAGE
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
@@ -349,6 +366,11 @@ REST_FRAMEWORK = {
         "agent_generate": env_str("THROTTLE_GENERATE", "10/hour"),
         # 登录接口，防撞库。按 IP + 用户名计数。
         "login": env_str("THROTTLE_LOGIN", "20/min"),
+        # 推送公众号草稿箱：每次都要真的调微信（微信有 45009 调用量上限），
+        # 而且一次推送要上传 N 张图，比生成一篇文章还费时。
+        # ★ 只挂在 POST 上 —— 查推送历史的 GET 不该被限流，
+        #   见 apps/wechat/views.py 里 get_throttles 的说明。
+        "wechat_publish": env_str("THROTTLE_WECHAT_PUBLISH", "30/hour"),
     },
     # 统一把异常转换成 {success:false, error:{...}} 信封，见 apps/common/exceptions.py
     "EXCEPTION_HANDLER": "apps.common.exceptions.envelope_exception_handler",
@@ -425,6 +447,64 @@ AGENT_LIMITS = {
 # 0 = 不限制（本地开发的默认值，测试不受影响）。
 AGENT_DAILY_QUOTA_PER_USER = env_int("AGENT_DAILY_QUOTA_PER_USER", 0)
 AGENT_DAILY_QUOTA_GLOBAL = env_int("AGENT_DAILY_QUOTA_GLOBAL", 0)
+
+
+# ---------------------------------------------------------------------------
+# 配图（文生图）
+# ---------------------------------------------------------------------------
+# ★ 走 OpenAI 兼容协议，所以能直接对接**中转站**（one-api / new-api 那类）：
+#   IMAGE_BASE_URL 填中转站的 /v1 地址，IMAGE_API_KEY 填中转站发的 key。
+#
+# ★ 三样缺一不可，而且**不会**回退到 OpenAI 官方地址 ——
+#   中转站的域名每家都不同，给一个默认值只会让人更迷惑。
+#   缺任何一项时 get_image_provider() 返回 NullImageProvider，
+#   生图接口会返回一句"缺哪几项"的中文提示，而不是一个 500。
+IMAGE_API_KEY = env_str("IMAGE_API_KEY", "")
+IMAGE_BASE_URL = env_str("IMAGE_BASE_URL", "")
+IMAGE_MODEL = env_str("IMAGE_MODEL", "")
+
+# 单张图的超时（秒）。生图本身就要 30~90 秒，往小调必然失败。
+IMAGE_TIMEOUT = env_int("IMAGE_TIMEOUT", 300)
+# 出图尺寸。竖版 1024x1536 更适合公众号正文的阅读流。
+# ★ 封面不依赖这个值 —— image_utils.make_wechat_thumb() 自己裁 900x500。
+IMAGE_SIZE = env_str("IMAGE_SIZE", "1024x1536")
+# quality / output_format 只有 gpt-image-* 系列认，老模型带了会直接 400，
+# providers.py 会先判断模型名再决定带不带，这里照填即可。
+IMAGE_QUALITY = env_str("IMAGE_QUALITY", "medium")
+IMAGE_OUTPUT_FORMAT = env_str("IMAGE_OUTPUT_FORMAT", "jpeg")
+# 画风前缀，会拼在每条配图建议前面。
+# ★ 默认值里那句"不要出现任何文字"是必须的：
+#   生图模型画的中文字几乎全是错的，配图里出现一串乱码字母比没图还难看。
+IMAGE_STYLE_PROMPT = env_str(
+    "IMAGE_STYLE_PROMPT",
+    "简洁现代的扁平化插画风格，柔和的低饱和配色，画面干净，"
+    "不要出现任何文字、字母、数字或水印。",
+)
+# 单篇文章的配图上限。这不是防烧钱（那是下面两个每日额度的事），
+# 是防止一篇文章被塞进几十张图 —— 正文图太多公众号里很难读。
+# 0 = 不限制。
+IMAGE_MAX_PER_ARTICLE = env_int("IMAGE_MAX_PER_ARTICLE", 8)
+# 每日配图额度，和 AGENT_DAILY_QUOTA_* 完全同一套思路（数表行数的硬账本，
+# 清缓存/重启/换 worker 都绕不过去）。0 = 不限制（本地开发的默认值）。
+IMAGE_DAILY_QUOTA_PER_USER = env_int("IMAGE_DAILY_QUOTA_PER_USER", 0)
+IMAGE_DAILY_QUOTA_GLOBAL = env_int("IMAGE_DAILY_QUOTA_GLOBAL", 0)
+
+
+# ---------------------------------------------------------------------------
+# 微信公众号
+# ---------------------------------------------------------------------------
+# ★ 公众号后台 → 设置与开发 → 基本配置 里拿这两个值。
+#   ★★ 同一个页面里的 **IP 白名单**必须加上服务器的公网 IP，
+#      否则所有接口都会返回 40164。这是后台配置，代码层面无解。
+#
+# ★ 本项目做的是**建草稿**，不是发布。已认证订阅号只能建草稿，
+#   由人在草稿箱里手动点发布 —— 这和产品红线（V1 绝不自动发布）正好一致。
+WECHAT_APP_ID = env_str("WECHAT_APP_ID", "")
+WECHAT_APP_SECRET = env_str("WECHAT_APP_SECRET", "")
+# 微信接口超时（秒）。上传正文图/封面要传几百 KB，别设太小。
+WECHAT_TIMEOUT = env_int("WECHAT_TIMEOUT", 60)
+# 草稿的"作者"字段。留空就是不带作者，微信允许。
+WECHAT_AUTHOR = env_str("WECHAT_AUTHOR", "")
 
 
 # ---------------------------------------------------------------------------

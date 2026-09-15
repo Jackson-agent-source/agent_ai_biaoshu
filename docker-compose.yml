@@ -87,6 +87,19 @@ services:
         #   容器进入重启循环，表现是 docker compose ps 一直显示 Restarting。
         condition: service_healthy
 
+    volumes:
+      # ★ AI 配图的文件。Django 往 /app/media 写（MEDIA_ROOT = BASE_DIR/"media"），
+      #   nginx 从同一个卷只读地发出去。
+      #
+      # ★★ 和 mysql_data 一样，`docker compose down -v` 会**连图片一起删**，
+      #     而且不可恢复。不带 -v 的 down/up 是安全的。
+      #     备份见 README 的部署章节 —— 只 dump 数据库会丢图。
+      #
+      # ★ 用命名卷而不是 bind mount（./media:/app/media）：
+      #   命名卷不需要在服务器上预先建目录，也不用操心属主，
+      #   而且不带 -v 的 down 不会动它。
+      - uploads:/app/media
+
     # 只给 nginx 用，不映射到宿主机
     expose:
       - "8000"
@@ -121,6 +134,14 @@ services:
       #   所以这里拿到的和 backend 容器里的是同一个值。
       ADMIN_URL_PATH: ${ADMIN_URL_PATH:-admin/}
 
+    volumes:
+      # ★ 配图。nginx 直接从卷里发 /media/，请求根本不进 Django：
+      #   后端只有 3×4=12 个 gthread worker，图片如果都走 Django，
+      #   几张图就能把 API 请求饿死。
+      #
+      # ★ :ro 只读 —— nginx 只需要读，不需要也不该有写权限。
+      - uploads:/var/www/media:ro
+
     depends_on:
       backend:
         # ★ 这里故意用 service_started 而不是 service_healthy。
@@ -154,3 +175,7 @@ services:
 
 volumes:
   mysql_data:
+  # ★ AI 配图（backend 写，web 只读）。
+  #   备份时必须把它和 mysql_data 一起打包，只 dump 数据库会丢图 ——
+  #   见 README 的部署章节。
+  uploads:
