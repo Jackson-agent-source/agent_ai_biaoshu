@@ -411,6 +411,7 @@ npm run dev
 | `WECHAT_APP_SECRET` | 同一页的 AppSecret。**这个泄露等于公众号被人接管**，只放服务器上 |
 | `WECHAT_TIMEOUT` | 调微信接口的超时秒数，默认 `30`（上传图片比取 token 慢） |
 | `WECHAT_AUTHOR` | 草稿里的「作者」一栏，一般填你的公众号名 |
+| `THROTTLE_WECHAT_PUBLISH` | 推送的频率上限，默认 `30/hour`。**只作用于推送**，查推送历史不受影响 |
 
 > ★ 还需要在公众号后台做两件**微信侧**的配置，代码这边无能为力：
 > **① 把服务器公网 IP 加进「IP 白名单」**（否则微信返回 `40164`）；
@@ -1157,9 +1158,16 @@ docker compose 会对 `.env` 做变量展开，`P@ss$word` 里的 `$word` 会被
 
 | 层 | 挡什么 | 配哪个变量 | 跨进程准不准 |
 | --- | --- | --- | --- |
-| ① 频率限流 | 短时间狂点按钮 | `THROTTLE_GENERATE` / `THROTTLE_LOGIN` | 用 `locmem` 时每个 worker 各算各的 |
+| ① 频率限流 | 短时间狂点按钮 | `THROTTLE_GENERATE` / `THROTTLE_LOGIN` / `THROTTLE_WECHAT_PUBLISH` | 用 `locmem` 时每个 worker 各算各的 |
 | ② **单用户每日额度** | 一个人正常用但用很多 | `AGENT_DAILY_QUOTA_PER_USER` | ✅ 天然准确 |
 | ③ **全站每日总额度** | 一群人各刷各的 / 注册小号 | `AGENT_DAILY_QUOTA_GLOBAL` | ✅ 天然准确 |
+| ④ **配图每日额度**（另一本账） | 生图按张计费，比生文贵 | `IMAGE_DAILY_QUOTA_PER_USER` / `_GLOBAL` | ✅ 天然准确，见下 |
+
+> **推送为什么要限流（而配图不用）？** 因为**微信侧有调用量上限**。
+> `draft/add` + `media/uploadimg` 每一张图都是一次真实调用，
+> 微信对接口有 45009（接口调用超过限制）。限流是替微信挡在前面，
+> 而不是替我们省钱。默认 `30/hour` 对正常使用完全够 ——
+> 它只在「写个循环反复推」时才生效。
 
 **★ 关键认识：限流只能限制「频率」，限制不住「总量」。**
 
