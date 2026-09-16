@@ -42,6 +42,7 @@
 | 风险提示 | 资料不足、工具失败、达到调用上限，都会明确写出来，而不是假装一切正常 |
 | 人工编辑 | 生成的是草稿，你可以改标题、改正文、标记状态 |
 | AI 配图 | 按文章内容自动给出配图建议，**你决定要不要生成**、生成哪几张 |
+| 上传实拍图 | 也可以传**你自己拍的照片**（现场图、产品图），和 AI 生成的图混排在同一篇里 |
 | 推送到公众号 | 一键把文章（含配图）推进公众号**草稿箱**，你在手机上确认后再发 |
 
 ---
@@ -343,6 +344,7 @@ npm run dev
 | 想做什么 | 去哪儿 | 说明 |
 | --- | --- | --- |
 | 生成配图 | 详情页右侧的「配图」面板 | 按模型的配图建议**逐条**生成（一张 30~90 秒），可以设封面、改图注、改插入位置、删掉重来 |
+| 上传实拍图 | 详情页右侧「配图」面板的「上传实拍图」 | 一次可选多张，浏览器里先压到 1600px 再传；传完和 AI 生成的图一样能改图注、改位置、设封面。上传的图标签显示「实拍图」，**不占每日生成额度** |
 | 推到公众号 | 详情页页头的「推送到公众号草稿箱」 | **必须先有至少一张配图**（公众号草稿必须有封面），没有时按钮是灰的并会告诉你为什么 |
 
 推完之后去**公众号后台 → 草稿箱**，能看到这篇文章（含正文插图和封面）。
@@ -616,7 +618,8 @@ SEARCH_BASE_URL=                # ★ 一定要清空这行
 | `caption` | 图注 |
 | `anchor_index` / `sort_order` | 插在第几个 `## ` 小节之后、同位置的先后顺序 |
 | `is_cover` | 是否作为公众号封面（**每篇最多一张**，由服务层保证） |
-| `provider` / `model_name` / `duration_ms` | 排查用 |
+| `source` | `ai` = 生成的，`upload` = 用户自己传的实拍图。**每日生成额度统计时排除 `upload`**（见上） |
+| `provider` / `model_name` / `duration_ms` | 排查用（上传的图这三项都是空 / NULL —— 它没有「生成」这个过程） |
 | `wechat_url` | 上传到微信后拿到的 `mmbiz.qpic.cn` 地址。★ 微信**不允许正文图外链**，所以传过一次就存下来复用 |
 | `error_message` | 失败时的中文提示 |
 
@@ -702,6 +705,7 @@ SEARCH_BASE_URL=                # ★ 一定要清空这行
 | GET | `/articles/{id}/sources` | 这篇文章引用的来源 |
 | GET | `/articles/{id}/images` | 这篇文章的配图列表（含 `section_count`：正文有几个 `## ` 小节，前端靠它画插入位置） |
 | **POST** | **`/articles/{id}/images`** | **★ 生成一张配图（同步，一张 30~90 秒）** |
+| **POST** | **`/articles/{id}/images/upload`** | **★ 上传一张自己拍的照片（multipart，字段名 `file`，一秒完成）** |
 | PATCH | `/images/{image_id}` | 改图注 / 改插入位置 / 设为封面 |
 | DELETE | `/images/{image_id}` | 删掉这张配图（**磁盘上的文件一起删**） |
 | GET | `/images/{image_id}/file` | 兜底取图（正常图片走 `/media/` 由 nginx 直发，这条只用于排查） |
@@ -718,6 +722,28 @@ SEARCH_BASE_URL=                # ★ 一定要清空这行
    不用前端先遍历一遍把别人置 false。
 3. **`anchor_index` 超出范围直接 400**（合法范围 `0 ~ section_count`），
    而不是被悄悄夹到边界上 —— 静默纠正会让「图跑到别的小节下面」变成一个查不出来的 bug。
+
+**上传实拍图（`POST /articles/{id}/images/upload`）的四个要点：**
+
+1. **单独一条路由**，不是让上面那个 POST 兼收两种格式。生成那条语义是
+   「调生图服务」（30~90 秒、算每日额度、有 `IMAGE_TIMEOUT`），
+   上传是「收一张用户自己的照片」（一秒、不算额度）。合在一起的话，
+   日志里一句「POST /articles/x/images 失败」根本看不出是哪件事。
+2. **字节一个都不能信。** 图片必须能真的被解码（PIL 的 `load()`）才放行，
+   扩展名和浏览器报的 `Content-Type` **都不看** —— `/media/` 和网站同源，
+   一个改了扩展名的 `.php` 落进去就是存储型 XSS。
+3. **EXIF 会在入库前被清掉**（手机照片带 GPS，而这些图是要公开发到公众号上的）。
+   清之前会先把 EXIF 里的**方向**烧进像素，否则竖拍的照片会永久躺倒 ——
+   顺序反了是不可逆的。前端 canvas 压缩时也做一次，两道各挡各的。
+4. **不算每日生成额度**（`IMAGE_DAILY_QUOTA_PER_USER` 数的是生图 API 的调用次数，
+   目的是防烧钱；传自己的照片不花钱），但**算单篇配图上限** ——
+   那条管的是「正文图太多很难读」，和花不花钱无关。
+
+> ★ 前端在这条路由上有一个**必须照抄**的细节：multipart 请求要把
+> `Content-Type` 整个去掉（`headers: { 'Content-Type': false }`），
+> **不能**手写成 `multipart/form-data`。原因写在 `frontend/src/api/http.ts`
+> 那个常量上面 —— 写错的表现是「请求成功但后端说没收到文件」，
+> 极难联想到是请求头的问题。
 
 **推送接口的两个要点：**
 
@@ -742,6 +768,7 @@ SEARCH_BASE_URL=                # ★ 一定要清空这行
 | `STRUCTURED_OUTPUT_ERROR` | 502 | 模型没按格式返回文章 |
 | `AGENT_LIMIT_EXCEEDED` | 429 | 超过调用限制 |
 | `IMAGE_PROVIDER_ERROR` | 502 | 生图服务调用失败（没填配置 / Key 不对 / 余额不足 / 内容审核拒绝） |
+| `IMAGE_UPLOAD_INVALID` | 400 | 上传的文件不是能识别的图片，或者太大/是空的 |
 | `IMAGE_LIMIT_EXCEEDED` | 400 | 超过单篇文章的配图上限 |
 | `IMAGE_QUOTA_EXCEEDED` | 429 | 超过每日配图额度 |
 | `WECHAT_NOT_CONFIGURED` | 400 | 没填 `WECHAT_APP_ID` / `WECHAT_APP_SECRET` |
@@ -1729,6 +1756,24 @@ proxy_read_timeout 600s;                        # ★★★ 不加，长文生�
 proxy_send_timeout 600s;
 ```
 
+**★ 还要把请求体上限调大**，否则「上传实拍图」会在这里被挡住：
+
+```nginx
+client_max_body_size 12m;                       # 宝塔默认 1m，传照片必 413
+```
+
+> 为什么是 12m 而不是「够用就行」的 2m：容器那层 nginx 是 `12m`，
+> 后端自己还有一道 10MB 的检查，超了会返回一句中文
+> （「图片太大了（13MB），最大支持 10MB，可以先在手机上压小一点」）。
+> 宝塔这一层如果比后端**紧**，超限的请求根本到不了后端，
+> 用户看到的是 nginx 那个白底黑字的 **413 页面** ——
+> 没有中文、没有原因、也没有「怎么办」。
+> 所以让它只负责挡住「别把 100MB 灌进来」，**判定和解释都交给后端**。
+>
+> 正常情况用不到这个数：前端会先用 canvas 把照片压到 1600px 再传
+> （`frontend/src/utils/imageResize.ts`），一般只有几百 KB。
+> 这个上限是给「前端没压成」（老浏览器、canvas 被禁用）兜底的。
+
 改完保存，宝塔会自动 reload nginx。
 
 ---
@@ -1970,6 +2015,9 @@ docker compose exec db mysql -u root -p -e "SHOW DATABASES;"   # 数据库通不
 | 页面能打开，接口全部失败 | nginx 还指着旧 backend IP → `docker compose restart web` |
 | 生成大文章必然 504 | **两层都有超时，都得看**：容器里 nginx 的 `proxy_read_timeout` 不是 `600s`，或**宝塔那层还是默认的 60s**（12.10 第 2 步 ②） |
 | 60 秒左右报错，但 `docker compose logs -f backend` 显示它还在正常跑完 | 症状同上，而且**几乎肯定是宝塔那层** —— 容器里那层已经配好了 |
+| **上传实拍图报 413（白底黑字的 nginx 页面）** | 请求体上限：宝塔那层还是默认的 `1m`（12.10 第 2 步）。★ 认这个症状的标志就是**页面不是中文的** —— 后端超限时给的是一句中文 |
+| **上传实拍图提示「没有收到图片文件」** | 前端发请求时 `Content-Type` 写错了。必须是 `{ 'Content-Type': false }`（整个去掉、让浏览器自己填），写成 `'multipart/form-data'` 或什么都不改都会让文件发不出去。见 `frontend/src/api/http.ts` |
+| **上传的竖拍照片躺倒了** | `image_utils.normalize_uploaded_photo` 里的 `ImageOps.exif_transpose` 被挪到清 EXIF 之后了 —— 顺序不能反，反了不可逆 |
 | 后台能登录但没样式 | ① 上线 HTTPS 之后：`location /static/` 少了 `X-Forwarded-Proto`（见 12.10 验证清单 ①）；② `collectstatic` 没跑成功 → 看 backend 启动日志 |
 | **`backend` 容器一直 unhealthy，但功能正常** | `SECURE_REDIRECT_EXEMPT` 没生效：健康检查拿到 301，而 `curl -f` 把 3xx 也算成功 |
 | `400 Invalid HTTP_HOST header` | `ALLOWED_HOSTS` 里少了你访问用的那个名字 |
