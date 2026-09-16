@@ -6,7 +6,7 @@
 ★★ 这条路和推送那条路是**两件独立的事**，测试也要分开写：
 
     推送  要凭据、要 IP 白名单、要草稿权限、必须有封面图
-    复制  什么都不需要，一次微信接口都不碰
+    复制  什么都不需要，没配凭据时一次微信接口都不碰
 
     所以下面第一组用例里最重要的一条是"没有配图也是 200" ——
     推送在同样的情况下必须返回 400（见 test_api.py 的 TestPreconditions），
@@ -19,8 +19,16 @@
     2. **image_count 必须等于真的拼进去了几张**。地址取不到的图会被摘掉，
        这时候还照着"候选张数"报数，前端就会告诉用户"已复制 3 张配图"，
        用户粘过去一张都没有。
-    3. **一次微信接口都不许调**。这是本功能存在的全部意义 ——
+    3. **没配凭据时一次微信接口都不许调**。这是本功能存在的全部意义 ——
        有权限的号用推送就行了，用复制的恰恰是推送走不通的那些。
+
+★ 后来加了一件事：**配了凭据的话，复制前会把配图先传一次微信**
+  （services._rehost_images_best_effort）。因为公众号**正文图不允许外链** ——
+  编辑器根本不去抓我们站上的图，粘过去就是四个"图片载入失败"的灰框
+  （2026-09 实测，四张图全挂）。
+  但它是**尽力而为**：没配凭据、接口报错、连续失败主动放弃 ——
+  每一步都必须静默退回本站地址，绝不能让复制这条路跟着坏掉。
+  文件末尾的 TestRehostImagesBestEffort 就是在钉死这件事。
 """
 
 from __future__ import annotations
@@ -29,6 +37,7 @@ import pytest
 
 from apps.imaging.models import GeneratedImage
 from apps.imaging.services import generate_image, public_file_url
+from apps.wechat.client import WeChatResult
 
 # ★ 模块级常量硬编码 URL，路由被改坏时测试才会红（用 reverse() 会跟着一起改）
 COPY_HTML_URL = "/api/v1/articles/{article_id}/wechat-html"
@@ -163,6 +172,158 @@ class TestNoPreconditions:
 
         assert data["image_count"] == 1
         assert "<img" in data["html"]
+
+
+# ===========================================================================
+# 复制前把配图传一次微信（尽力而为）
+# ===========================================================================
+@pytest.fixture
+def wechat_credentials(settings):
+    """配上微信凭据 —— 单测用的假值，长度按真实规格。
+
+    ★ 必须显式配：settings_test.py 刻意把两个值留空，
+      好让"没配凭据"那条路径成为默认。这里的用例要测的是配了之后的行为。
+    """
+    settings.WECHAT_APP_ID = "wx_test_appid_0001"
+    settings.WECHAT_APP_SECRET = "0" * 32
+    return settings
+
+
+class TestRehostImagesBestEffort:
+    """★★ 这一组的主题只有一个：**上传失败绝不能把复制搞坏**。
+
+    为什么值得单独一组：这个改动把一个原本"零外部依赖"的接口，
+    变成了"会去调微信"的接口。风险全在失败路径上 ——
+    40164（IP 白名单没配）、48001（个人订阅号没 uploadimg 权限）
+    在真实服务器上都是**常态**，而这条路必须在那时候照样能用。
+    """
+
+    def test_rehosts_images_when_credentials_work(
+        self, auth_client, article_with_image, base_url, wechat_credentials, mocker
+    ):
+        """★ 配了凭据且上传成功 -> 正文里必须是 mmbiz 地址。
+
+        用 mmbiz 地址才是"不用赌"的那条路：公众号正文图不允许外链，
+        编辑器不会去抓我们站上的图。换成 mmbiz 之后必定显示得出来。
+        """
+        fake_client = mocker.Mock()
+        fake_client.get_access_token.return_value = WeChatResult(ok=True, token="t")
+        fake_client.upload_body_image.return_value = WeChatResult(
+            ok=True, url="https://mmbiz.qpic.cn/mmbiz_jpg/rehosted.jpg"
+        )
+        mocker.patch("apps.wechat.services.get_wechat_client", return_value=fake_client)
+
+        article, image = article_with_image
+        data = get_data(auth_client, article)
+
+        assert "https://mmbiz.qpic.cn/mmbiz_jpg/rehosted.jpg" in data["html"]
+        # 本站地址必须**不再**出现 —— 出现了说明退回了老路
+        assert f"{base_url}/media/" not in data["html"]
+        assert data["image_count"] == 1
+        assert data["warning"] == ""
+
+        # 地址写回了记录：下次复制不用再传一遍
+        image.refresh_from_db()
+        assert image.wechat_url == "https://mmbiz.qpic.cn/mmbiz_jpg/rehosted.jpg"
+
+    def test_still_works_when_client_explodes(
+        self, auth_client, article_with_image, base_url, wechat_credentials, mocker
+    ):
+        """★★ 配了凭据但拿客户端就抛异常 —— 仍然 200，仍然用本站地址。
+
+        这是本次改动最要紧的一条：少让它变成新的前置条件。
+        """
+        mocker.patch(
+            "apps.wechat.services.get_wechat_client",
+            side_effect=RuntimeError("微信炸了"),
+        )
+
+        article, image = article_with_image
+        data = get_data(auth_client, article)
+
+        assert data["image_count"] == 1
+        assert f'src="{base_url}{image.image_file.url}"' in data["html"]
+
+        image.refresh_from_db()
+        assert image.wechat_url == ""
+
+    def test_falls_back_when_access_token_fails(
+        self, auth_client, article_with_image, base_url, wechat_credentials, mocker
+    ):
+        """★ 拿不到 access_token（40164 IP 白名单没配）-> 退回本站地址。
+
+        40164 是真实部署里最常见的一种失败：代码全对，
+        只是服务器的出口 IP 没加进公众号后台的白名单。
+        这种时候**不该上传任何一张图** —— 已经知道一定会失败。
+        """
+        fake_client = mocker.Mock()
+        fake_client.get_access_token.return_value = WeChatResult(
+            ok=False, errcode=40164, error="wechat_ip_not_in_whitelist"
+        )
+        mocker.patch("apps.wechat.services.get_wechat_client", return_value=fake_client)
+
+        article, image = article_with_image
+        data = get_data(auth_client, article)
+
+        assert data["image_count"] == 1
+        assert f'src="{base_url}{image.image_file.url}"' in data["html"]
+        # token 都没拿到，一张都不该试
+        fake_client.upload_body_image.assert_not_called()
+
+    def test_falls_back_when_uploadimg_is_unauthorized(
+        self, auth_client, article_with_image, base_url, wechat_credentials, mocker
+    ):
+        """★ 个人订阅号没有 uploadimg 权限（48001）-> 退回本站地址。
+
+        这条大概率就是线上真实情况：号是个人订阅号，
+        media/uploadimg 这个接口根本没开。那时候复制功能必须照常可用，
+        用户手动往编辑器里插图即可。
+        """
+        fake_client = mocker.Mock()
+        fake_client.get_access_token.return_value = WeChatResult(ok=True, token="t")
+        fake_client.upload_body_image.return_value = WeChatResult(
+            ok=False, errcode=48001, error="wechat_api_unauthorized"
+        )
+        mocker.patch("apps.wechat.services.get_wechat_client", return_value=fake_client)
+
+        article, image = article_with_image
+        data = get_data(auth_client, article)
+
+        assert data["image_count"] == 1
+        assert f'src="{base_url}{image.image_file.url}"' in data["html"]
+
+        image.refresh_from_db()
+        assert image.wechat_url == ""
+
+    def test_gives_up_after_consecutive_failures(
+        self, user, article_for_images, fake_image_provider, auth_client, base_url,
+        wechat_credentials, mocker
+    ):
+        """★ 连续失败 2 张就放弃，不要把剩下的都试一遍。
+
+        一篇文章可能有十几张配图。48001 这种错是**权限级**的 ——
+        第一张失败，后面每一张都必然失败。全试完既慢（每次一个网络往返）、
+        又会在微信侧刷出一串无谓的失败调用。
+        """
+        for i in range(4):
+            generate_image(
+                article=article_for_images, user=user, suggestion=f"第 {i} 张", caption=f"图{i}"
+            )
+
+        fake_client = mocker.Mock()
+        fake_client.get_access_token.return_value = WeChatResult(ok=True, token="t")
+        fake_client.upload_body_image.return_value = WeChatResult(
+            ok=False, errcode=48001, error="wechat_api_unauthorized"
+        )
+        mocker.patch("apps.wechat.services.get_wechat_client", return_value=fake_client)
+
+        data = get_data(auth_client, article_for_images)
+
+        # 4 张图都在，全部退回本站地址 —— 功能没受影响
+        assert data["image_count"] == 4
+        assert f"{base_url}/media/" in data["html"]
+        # 但只试了 2 次（_REHOST_MAX_CONSECUTIVE_FAILURES）
+        assert fake_client.upload_body_image.call_count == 2
 
 
 # ===========================================================================

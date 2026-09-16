@@ -15,10 +15,22 @@
     publish_article_to_wechat()   走微信 API 建草稿，要凭据、要 IP 白名单、
                                   要草稿权限、必须有封面图
     build_article_copy_html()    只拼一份 HTML 给用户**手动复制粘贴**，
-                                  一次微信接口都不碰，什么都不需要
+                                  **前置条件一个都不要**
 
     第二条路存在的意义就是"第一条路走不通的时候还有办法发文章"
     （号没有草稿权限、或者用户暂时不想配 AppSecret）。
+
+★★ 复制路径对微信接口做一件**尽力而为**的事（_rehost_images_best_effort）：
+
+    正文图片微信**不允许外链**（见 client.upload_body_image 的说明）。
+    实测把本站地址的图粘进公众号编辑器，编辑器不会替我们转存，
+    用户看到的是「图片载入失败 / 系统繁忙」——四张图全挂。
+
+    所以复制之前，凡是还没上过微信的配图，都尽力传一次换回 mmbiz 地址。
+    **但这一步绝不能变成前置条件**：凭据没配、号没有 uploadimg 权限、
+    网络超时，任何一种情况都静默跳过、退回本站地址，功能照常可用。
+    凭据没配时**一次微信接口都不调** ——
+    test_copy_html_api.py::test_works_without_any_wechat_credentials 守着这条。
 """
 
 from __future__ import annotations
@@ -334,6 +346,96 @@ def _copy_image_url(image: GeneratedImage) -> str:
     return (getattr(image, "wechat_url", "") or "") or public_file_url(image)
 
 
+# ★ 连续失败这么多张就放弃剩下的。用来兜住"整个号没有权限"或"网络不通"这类
+#   系统性故障 —— 不然每张图都要等一次超时（默认 60 秒），点一次「复制」
+#   能卡好几分钟。单张图坏掉不会连败两次，所以不会误伤。
+_REHOST_MAX_CONSECUTIVE_FAILURES = 2
+
+
+def _wechat_credentials_present() -> bool:
+    """凭据配全了没有。
+
+    ★ 故意直接读 settings，**不走 get_wechat_client()** ——
+      后者在没配时会抛 WeChatNotConfiguredError，而这里只想安静地判断一下。
+      更重要的是：凭据没配时调用方一次微信接口都不会碰，
+      这正是 test_works_without_any_wechat_credentials 守的那条线。
+    """
+    app_id = (getattr(settings, "WECHAT_APP_ID", "") or "").strip()
+    app_secret = (getattr(settings, "WECHAT_APP_SECRET", "") or "").strip()
+    return bool(app_id and app_secret)
+
+
+def _rehost_images_best_effort(images: list[GeneratedImage]) -> int:
+    """把还没上过微信的配图尽力传一次，返回成功张数。
+
+    ★ 为什么值得做：正文图片微信**不允许外链**，公众号编辑器也不会替我们
+      把外链图转存 —— 实测四张图全报「图片载入失败」。上传一次换回
+      mmbiz.qpic.cn 的地址，那个必定显示得出来。
+
+    ★ 为什么是"尽力而为"：这条路必须保住"什么前置条件都没有"。
+      所以**任何一步失败都只是少一次优化** —— 记一条日志、退回本站地址，
+      不抛异常、不改变返回结果、不让接口变 4xx/5xx。
+
+    ★ 失败是静默的，但**不是无声的**：上传失败会打 WARNING 日志，
+      排查"图为什么还是裂的"时看 backend 日志即可。
+      想主动检查配置能不能用，跑 `python manage.py wechat_check`。
+    """
+    if not _wechat_credentials_present():
+        # ★ 常见情况，而且完全正常：用户没打算用公众号 API。
+        #   这里连日志都不打，免得每次点「复制」都刷一行。
+        return 0
+
+    pending = [img for img in images if not (getattr(img, "wechat_url", "") or "")]
+    if not pending:
+        return 0
+
+    try:
+        client = get_wechat_client()
+    except Exception:  # noqa: BLE001 —— 这条路什么错都不能往外抛
+        logger.warning("复制正文前拿微信客户端失败，配图沿用本站地址", exc_info=True)
+        return 0
+
+    # ★ 先单独把 token 拿一次。IP 白名单没加（40164）、AppSecret 写错（40125）
+    #   这类问题在这一步就暴露了，此时直接放弃，不用一张张图去撞。
+    token = client.get_access_token()
+    if not token.ok:
+        logger.warning(
+            "拿 access_token 失败（%s/%s），%d 张配图沿用本站地址",
+            token.error,
+            token.errcode,
+            len(pending),
+        )
+        return 0
+
+    uploaded = 0
+    consecutive_failures = 0
+    for image in pending:
+        try:
+            ok = _ensure_body_image(client=client, image=image)
+        except Exception:  # noqa: BLE001
+            logger.warning("上传配图抛异常 image_id=%s", image.id, exc_info=True)
+            ok = False
+
+        if ok:
+            uploaded += 1
+            consecutive_failures = 0
+            continue
+
+        consecutive_failures += 1
+        if consecutive_failures >= _REHOST_MAX_CONSECUTIVE_FAILURES:
+            logger.warning(
+                "配图连续 %d 张上传失败，剩下的 %d 张本次不再尝试"
+                "（多半是这个号没有 uploadimg 权限，或微信不通）",
+                consecutive_failures,
+                len(pending) - uploaded - consecutive_failures,
+            )
+            break
+
+    if uploaded:
+        logger.info("复制正文前上传了 %d/%d 张配图，正文将用 mmbiz 地址", uploaded, len(pending))
+    return uploaded
+
+
 def build_article_copy_html(*, article: Article) -> dict:
     """拼一份"复制到公众号"用的正文 HTML。
 
@@ -344,9 +446,10 @@ def build_article_copy_html(*, article: Article) -> dict:
 
         1. **不要求有配图**。推送必须有封面图（微信 draft/add 的硬要求），
            而复制只复制文字是完全正当的用法。
-        2. **完全不碰微信接口**。不查凭据、不查 wechat_url、不上传。
-           公众号没有草稿权限（48001）的号照样能用这个功能 ——
+        2. **前置条件一个都没有**。号没有草稿权限（48001）照样能用这个功能 ——
            这正是它存在的意义，tests 里有一条专门守着这一点。
+           唯一会碰微信接口的是 _rehost_images_best_effort()，
+           而它**没配凭据就完全不调用**，失败也只是退回本站地址。
         3. 图片来源优先 mmbiz 地址，没有就用本站地址（见 _copy_image_url）。
 
     返回 {"html", "image_count", "section_count", "warning"}。
@@ -357,6 +460,11 @@ def build_article_copy_html(*, article: Article) -> dict:
     # ★ 有图片文件才算数。image_file 为空的记录进 build_wechat_html 也只会被丢掉。
     with_file = list(succeeded.exclude(image_file=""))  # FileField 空值是空串不是 NULL
     no_file = succeeded.count() - len(with_file)
+
+    # ★ 必须放在下面算 images **之前**：上传成功会把 wechat_url 写回对象，
+    #   紧接着的 _copy_image_url 就取到 mmbiz 地址了。
+    #   这一步失败不影响任何东西 —— 详见 _rehost_images_best_effort 的说明。
+    _rehost_images_best_effort(with_file)
 
     # ★ 先在这里把地址算出来，取不到地址的图**提前摘掉**，而不是留给
     #   build_wechat_html 内部跳过。否则 image_count 会按"候选张数"报，
