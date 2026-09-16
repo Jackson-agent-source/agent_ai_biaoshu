@@ -316,6 +316,23 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+# ---- 复制到公众号：配图的对外基地址 ----
+# 只被 apps/imaging/services.public_file_url() 用。粘进 mp.weixin.qq.com 的 HTML
+# 必须带**绝对**地址 —— 相对路径在那里会被解析成 mp.weixin.qq.com/media/...。
+#
+# ★★ **必须带端口**，和上面的 WEB_PORT 保持一致，例如 http://203.0.113.10:8080。
+#    漏掉端口的症状是"复制出来的正文文本完全正常、图片全是裂的"，
+#    而且要和"https 页面拦 http 图片"区分开，很难查。
+#
+# ★ 刻意**不**回退到 SITE_ORIGIN：它的默认值（本文件末尾）是 http://localhost:5173，
+#   而线上 .env 里那一项（照 .env.deploy.example 抄的）是 http://<IP> —— 恰恰少了端口。
+#   拿它当兜底等于把上面那个坑从后门放进来，而且因为值非空、连 warning 都不会发。
+#
+# ★ 留空 = 复制时跳过所有配图并提示用户去配（宁可少图，也不要一墙裂图）。
+#   将来域名 + HTTPS 配好之后，把这里改成 https://你的域名 即可，代码一个字都不用动 ——
+#   这同时也是解决"https 页面里的 http 图片会被浏览器按混合内容拦掉"的正路。
+MEDIA_PUBLIC_BASE_URL = env_str("MEDIA_PUBLIC_BASE_URL", "").rstrip("/")
+
 # Django 4.2+ 用 STORAGES 取代了旧的 STATICFILES_STORAGE
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},

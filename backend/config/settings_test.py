@@ -86,6 +86,13 @@ WECHAT_APP_SECRET = ""
 WECHAT_TIMEOUT = 5
 WECHAT_AUTHOR = ""
 
+# ---- 复制到公众号：配图的对外基地址 ----
+# ★ 必须显式写出来，哪怕是空串。不写的话这个值会从本地 .env 继承 ——
+#   于是"没配地址要跳过图片并出 warning"那条用例，在配过它的机器上红、
+#   在没配的机器上绿，而且报错完全指不到 .env 上。
+#   需要它的用例自己用 pytest-django 的 settings fixture 临时改。
+MEDIA_PUBLIC_BASE_URL = ""
+
 # ---- 让密码哈希变快，测试跑得更迅速 ----
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 

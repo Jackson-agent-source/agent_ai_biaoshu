@@ -3,12 +3,17 @@
  * 对应后端 /articles/<id>/wechat-publishes 和 /wechat-publishes/<id>。
  *
  * ★ 这里做的永远是**建草稿**，不是发布。详见 types/wechat.ts 顶部的说明。
+ *
+ * ★ 另外还有一个和推送**完全独立**的 /articles/<id>/wechat-html
+ *   （「复制到公众号」，见下面的 getWeChatHtml）——
+ *   它一次微信接口都不碰，不需要任何凭据。
  */
 
 import { api } from './http'
 
 import type { Paginated } from '@/types/api'
 import type {
+  ArticleWeChatHtml,
   PublishToWeChatRequest,
   WeChatPublish,
   WeChatPublishDetail,
@@ -61,4 +66,17 @@ export function listWeChatPublishes(
 /** 单条推送详情（比列表多一份当时真正发出去的正文 HTML 快照） */
 export function getWeChatPublish(publishId: string): Promise<WeChatPublishDetail> {
   return api.get<WeChatPublishDetail>(`/wechat-publishes/${publishId}`)
+}
+
+/**
+ * 取「复制到公众号」用的正文 HTML。
+ *
+ * ★ 不设长超时：这条路一次外部调用都没有（不传图、不调微信），
+ *   只是查库 + 渲染，默认的 30 秒绰绰有余。
+ *
+ * ★ 后端**不会**因为"没有配图"报错（那是推送接口的前置条件）——
+ *   没有配图时返回的是 200 + image_count=0 的纯文字正文。
+ */
+export function getWeChatHtml(articleId: string): Promise<ArticleWeChatHtml> {
+  return api.get<ArticleWeChatHtml>(`/articles/${articleId}/wechat-html`)
 }

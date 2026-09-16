@@ -91,7 +91,20 @@ def split_markdown_sections(markdown: str) -> list[MarkdownSection]:
             # 遇到新的二级标题：先把上一段收尾，再开新的一段
             flush()
             current_title = match.group(1).strip()
-            current_lines = []
+            # ★ 标题这一行**要留在段落里**，不能丢。
+            #
+            #   原来这里是 current_lines = []，于是 section.markdown 里
+            #   一个小标题都没有 —— 而 html_builder 唯一的输入就是它
+            #   （见 apps/wechat/html_builder.py 的 render_markdown_to_html(section.markdown)）。
+            #   结果是**推到公众号的正文和复制出去的正文里，所有 ## 小标题全都不见了**：
+            #   一篇本来分了三节的文章，粘过去变成一整片没有分节的段落。
+            #
+            #   留着之后，html_builder 里那套 _HEADING_STYLES / h1~h6 降级成 p
+            #   的机制才真正生效 —— 那套代码就是为这些小标题写的。
+            #
+            #   ★ index / title / section_count / section_titles 都不受影响：
+            #     切段规则一个字没改，只是这一段"包含自己的标题行"了。
+            current_lines = [line]
             continue
 
         current_lines.append(line)

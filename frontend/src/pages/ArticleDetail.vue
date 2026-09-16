@@ -3,8 +3,11 @@
  * 文章详情页。
  * 左边是编辑器，右边是四个信息 tab：资料来源 / 配图 / Agent 信息 / 风险提示。
  *
- * 页头还有一个「推送到公众号草稿箱」按钮 —— 它依赖配图，
- * 没有可用配图时会被置灰并说明原因（见 canPush / pushHint）。
+ * 页头有两个跟公众号有关的按钮，**前置条件完全不同**，别把它们看成一回事：
+ *   「推送到公众号草稿箱」 走微信 API，要凭据、要草稿权限，必须有配图 ——
+ *                          没配图时置灰并说明原因（见 canPush / pushHint）
+ *   「复制到公众号」       只拼一份富文本给用户手动粘贴，什么都不需要 ——
+ *                          永远可用，这是 API 走不通时的退路
  */
 
 import { computed, onMounted, ref, watch } from 'vue'
@@ -18,15 +21,17 @@ import RunStatus from '@/components/RunStatus.vue'
 import SourceList from '@/components/SourceList.vue'
 import { getRun } from '@/api/agent'
 import { ApiError } from '@/api/http'
-import { listWeChatPublishes, publishToWeChat } from '@/api/wechat'
+import { getWeChatHtml, listWeChatPublishes, publishToWeChat } from '@/api/wechat'
 import { useArticleStore } from '@/stores/article'
 import { useImageStore } from '@/stores/image'
 import { ARTICLE_STATUS_LABELS, type Article, type ArticleStatus } from '@/types/article'
 import type { AgentRun } from '@/types/agent'
 import {
   WECHAT_PUBLISH_STATUS_TAG_TYPES,
+  type ArticleWeChatHtml,
   type WeChatPublish,
 } from '@/types/wechat'
+import { copyRichText } from '@/utils/clipboard'
 import { formatDateTime } from '@/utils/format'
 
 const route = useRoute()
@@ -54,6 +59,8 @@ const activeTab = ref<string>('sources')
 const lastPublish = ref<WeChatPublish | null>(null)
 /** 正在推送 */
 const publishing = ref(false)
+/** 正在取正文 HTML 并写剪贴板 */
+const copying = ref(false)
 
 /**
  * 能不能推送。
@@ -208,6 +215,59 @@ async function handlePush(): Promise<void> {
   }
 }
 
+/**
+ * 复制到公众号（正文 + 配图，富文本）。
+ *
+ * ★ 和 handlePush 最大的区别：**没有任何前置条件**。
+ *   没有配图也能复制（只复制文字），没配 WECHAT_APP_ID 也能复制，
+ *   公众号没有草稿权限也能复制 —— 这个功能存在的意义就是
+ *   "公众号 API 用不了的时候还有一条路"。
+ *
+ * ★ 只复制正文，**不含标题和摘要** —— 公众号编辑器把它们当两个独立的
+ *   输入框，塞进正文里用户还得手动删掉。
+ */
+async function handleCopy(): Promise<void> {
+  if (!article.value || copying.value) {
+    return
+  }
+  copying.value = true
+  try {
+    const data: ArticleWeChatHtml = await getWeChatHtml(article.value.id)
+
+    // ★ 空内容绝不能往剪贴板里写 —— 那会把用户原来复制的东西抹掉，
+    //   比"复制失败"更让人恼火。后端对空正文返回的是 200 + 空 html，
+    //   所以判空必须在这里做。
+    if (!data.html.trim()) {
+      ElMessage.warning('文章正文是空的，没有内容可以复制')
+      return
+    }
+
+    const ok = await copyRichText(data.html)
+    if (!ok) {
+      // ★ 浏览器不许自动复制时的兜底提示：编辑器就在页面左边，
+      //   手动选中再 Ctrl+C 是完全可行的，得明确告诉他这条路。
+      ElMessage.error('浏览器不允许自动复制，请在下面的编辑器里手动选中正文后按 Ctrl+C')
+      return
+    }
+
+    ElMessage.success(
+      data.image_count > 0
+        ? `已复制正文和 ${data.image_count} 张配图，去公众号编辑器里粘贴即可`
+        : '已复制正文，去公众号编辑器里粘贴即可',
+    )
+
+    // 后端的提醒（图片地址没配、有图没有文件）单独再说一条，
+    // 不和上面那句成功提示挤在一起 —— 它是"复制成功了，但少东西"
+    if (data.warning) {
+      ElMessage.warning(data.warning)
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof ApiError ? error.message : '复制失败')
+  } finally {
+    copying.value = false
+  }
+}
+
 /** 归档（软删除） */
 async function handleArchive(): Promise<void> {
   if (!article.value) {
@@ -262,6 +322,16 @@ watch(articleId, () => {
       </div>
 
       <div class="header-right">
+        <!--
+          复制到公众号（富文本）。
+          ★ 和右边那个推送按钮不同，它**永远可用** —— 没有配图也能复制文字，
+            没配公众号凭据也能复制。所以不需要 el-tooltip 那层 span 包装，
+            那个包装的存在只是因为**禁用的 button 不触发鼠标事件**。
+        -->
+        <el-button v-if="article" :loading="copying" @click="handleCopy">
+          复制到公众号
+        </el-button>
+
         <!--
           推送到公众号草稿箱。
           ★ 用 el-tooltip 包一个 span 是必须的，不是啰嗦：
@@ -424,6 +494,9 @@ watch(articleId, () => {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* 多了「复制到公众号」之后是三个控件（两个按钮 + 状态下拉），
+     窄屏下要能换行，而不是挤出容器把「归档」顶到看不见的地方 */
+  flex-wrap: wrap;
 }
 
 /* tooltip 的挂载点。inline-block 是为了让它跟着按钮的尺寸走 */

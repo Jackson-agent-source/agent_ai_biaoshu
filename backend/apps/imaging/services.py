@@ -39,6 +39,41 @@ def get_article_images(article: Article):
     return article.images.all().order_by("anchor_index", "sort_order", "created_at")
 
 
+def public_file_url(image: GeneratedImage) -> str:
+    """配图的**对外绝对**地址；没配基地址或没有文件时返回空串。
+
+    给"复制到公众号"这类**要在别人的页面上渲染**的场合用。
+
+    ★ 为什么这里能给绝对地址，而 GeneratedImageSerializer.file_url 明确不许：
+      那个字段喂的是**本站页面**的 <img src>，相对路径在 dev（vite proxy 转给后端）
+      和 prod（nginx 直发）两端拿到的是同一个字符串，所以不该把 Host 写死进响应。
+      但复制出去的 HTML 会被粘到 mp.weixin.qq.com 上 —— 相对路径在那里会被解析成
+      mp.weixin.qq.com/media/... ，图必裂。两边的要求不同，不是自相矛盾。
+
+    ★★ 绝对不要用 request.build_absolute_uri() 来兜底。frontend/nginx.conf 用的是
+       `proxy_set_header Host $host`，而 nginx 的 $host **不带端口**，
+       于是它会给出 http://<IP>/media/...（少了 :8080）—— 那个地址会打到宝塔占着的
+       80 端口。而它的症状（粘过去图看不见）和"https 页面里的 http 图片被浏览器拦掉"
+       一模一样，极难分辨。所以基地址只从配置读，不从请求里猜。
+
+    ★ 没配 MEDIA_PUBLIC_BASE_URL 时返回空串而不是相对路径：
+      返回相对路径的话，用户粘过去会看到一排裂图；返回空串则由调用方
+      （build_article_copy_html）跳过这些图并明确提示用户去配。
+      宁可少图，也不要一墙裂图。
+    """
+    if not image.image_file:
+        # FileField 的空值是空串不是 NULL。
+        # ★ 这里不能读 .url —— 文件为空时 Django 会抛 ValueError。
+        return ""
+
+    base = (getattr(settings, "MEDIA_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
+    if not base:
+        return ""
+
+    # image_file.url 是相对路径 /media/images/2026/09/xxx.jpg
+    return f"{base}{image.image_file.url}"
+
+
 # ---------------------------------------------------------------------------
 # 额度
 # ---------------------------------------------------------------------------

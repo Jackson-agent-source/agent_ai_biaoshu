@@ -84,3 +84,31 @@ export interface PublishToWeChatRequest {
    */
   force_new?: boolean
 }
+
+/**
+ * 「复制到公众号」用的正文 HTML。
+ * 对应 GET /articles/<id>/wechat-html。
+ *
+ * ★ 只有正文，**没有标题、作者和摘要** —— 公众号编辑器把它们当三个独立的
+ *   输入框，塞进正文里反而要用户手动删掉。
+ *
+ * ★ 这条接口和推送那组**完全独立**：不需要配 WECHAT_APP_ID，
+ *   也不需要公众号有草稿权限（48001）。它就是为"API 走不通"准备的退路 ——
+ *   复制只复制文字是完全正当的用法，所以没有配图也是 200。
+ */
+export interface ArticleWeChatHtml {
+  /** 已补好内联样式、图片按锚点插好的整篇正文 HTML */
+  html: string
+  /** 真的拼进 HTML 的配图张数（没有图片文件、或者取不到地址的不算） */
+  image_count: number
+  /**
+   * 正文里有几个 `## ` 小节。
+   * ★ 和后端 /articles/<id>/images 用的是**同一条切段规则**（含代码块围栏的处理）。
+   */
+  section_count: number
+  /**
+   * 非空就要提示用户（例如图片地址没配、有配图没有文件）。
+   * 空字符串 = 一切正常。
+   */
+  warning: string
+}

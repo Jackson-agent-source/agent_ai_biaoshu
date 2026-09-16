@@ -32,6 +32,7 @@ from __future__ import annotations
 import html as html_lib
 import logging
 import re
+from collections.abc import Callable
 from html.parser import HTMLParser
 from typing import Any
 
@@ -122,6 +123,9 @@ def image_tag(src: str, caption: str = "") -> str:
 
     ★ src 必须是 uploadimg 返回的 mmbiz.qpic.cn 地址 —— 微信不让正文外链图片，
       放别的地址在手机上是**看不到图**的（浏览器里可能显示正常，很容易误判）。
+      唯一的例外是"复制到公众号"那条路（见 services.build_article_copy_html）：
+      它不经过微信接口，只能给本站地址，图片能不能显示取决于公众号编辑器
+      会不会把外链图重新上传到自己的服务器 —— 那件事要在线上实测。
 
     图注用 <p> 贴在图片下方，而不是用 alt/title：
     公众号里 alt 不会显示出来，用户看不到图注就没有意义。
@@ -146,12 +150,33 @@ def image_tag(src: str, caption: str = "") -> str:
 # ---------------------------------------------------------------------------
 # 正文拼装
 # ---------------------------------------------------------------------------
-def build_wechat_html(*, markdown: str, images: list[Any]) -> str:
+def _wechat_image_url(image: Any) -> str:
+    """默认取图地址：微信上传成功后才有的 mmbiz.qpic.cn 地址。
+
+    ★★ 这个默认值就是**推送路径**的行为，一个字都不许改 ——
+       apps/wechat/tests/test_api.py 里那条
+       `assert "/media/" not in payload["content"]` 正是守着它。
+       复制到公众号那条路会传自己的 src_getter 进来（见 services.py），
+       千万别图省事把两者合并。
+    """
+    return getattr(image, "wechat_url", "") or ""
+
+
+def build_wechat_html(
+    *,
+    markdown: str,
+    images: list[Any],
+    src_getter: Callable[[Any], str] = _wechat_image_url,
+) -> str:
     """把 Markdown 正文和配图拼成公众号能吃的 HTML。
 
     参数：
-        markdown  文章正文（Article.content_markdown）
-        images    配图列表。每一项要有 anchor_index / sort_order / wechat_url / caption
+        markdown    文章正文（Article.content_markdown）
+        images      配图列表。每一项要有 anchor_index / sort_order / caption，
+                    以及 src_getter 需要的东西（默认是 wechat_url）
+        src_getter  怎么从一张配图取图地址。默认读 wechat_url（推送路径）；
+                    复制路径传自己的实现 —— 那条路上图片根本没上传到微信，
+                    wechat_url 全是空的，用默认值会得到一篇没有图的 HTML。
 
     返回：已经补好内联样式的 HTML 字符串。
 
@@ -194,12 +219,15 @@ def build_wechat_html(*, markdown: str, images: list[Any]) -> str:
             parts.append(rendered)
 
         for image in grouped.get(section.index, []):
-            src = getattr(image, "wechat_url", "") or ""
+            # 留一个 or "" 是防自定义 src_getter 返回 None。
+            # image_tag 本身也对空值免疫（返回空串），这里判空只是为了下面那条日志。
+            src = src_getter(image) or ""
             if not src:
-                # 到这一步还没上传成功，说明上游漏了上传。
+                # 推送路径上走到这里 = 上游漏了上传；
+                # 复制路径上 = 这张图没有文件、或者没配图片对外地址。
                 # 不静默跳过 —— 让用户看到少了一张图，比"推送成功但没图"好。
                 logger.error(
-                    "配图还没有微信地址，已跳过 image_id=%s", getattr(image, "id", "?")
+                    "配图没有可用的图片地址，已跳过 image_id=%s", getattr(image, "id", "?")
                 )
                 continue
             parts.append(image_tag(src, getattr(image, "caption", "")))

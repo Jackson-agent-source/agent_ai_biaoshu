@@ -5,10 +5,11 @@
     GET  /api/v1/articles/<article_id>/wechat-publishes   推送历史（分页）
     POST /api/v1/articles/<article_id>/wechat-publishes   推送到草稿箱
     GET  /api/v1/wechat-publishes/<publish_id>            单条推送详情（含正文快照）
+    GET  /api/v1/articles/<article_id>/wechat-html        复制到公众号用的正文 HTML
 
 ★ 这里做的永远是**建草稿**，不是发布。原因见 apps/wechat/services.py 的模块注释。
 
-★ View 保持薄：业务全在已有的 services.publish_article_to_wechat 里。
+★ View 保持薄：业务全在已有的 services 里。
   这样"检查 → 上传图 → 建草稿 → 记录"这个顺序只有一个地方实现，
   不会出现某个入口漏掉前置检查的情况。
 
@@ -38,7 +39,11 @@ from apps.wechat.serializers import (
     WeChatPublishDetailSerializer,
     WeChatPublishListSerializer,
 )
-from apps.wechat.services import get_publish_history, publish_article_to_wechat
+from apps.wechat.services import (
+    build_article_copy_html,
+    get_publish_history,
+    publish_article_to_wechat,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -134,3 +139,25 @@ class WeChatPublishDetailView(APIView):
     def get(self, request: Request, publish_id) -> Response:
         record = get_object_or_404(WeChatPublish, id=publish_id, user=request.user)
         return success_response(WeChatPublishDetailSerializer(record).data)
+
+
+class ArticleWeChatHtmlView(APIView):
+    """GET /api/v1/articles/<article_id>/wechat-html —— 复制到公众号用的正文 HTML。
+
+    ★ 和推送接口的**关键区别：不做任何前置检查**。
+      没有配图、没配 WECHAT_APP_ID、公众号没有草稿权限（48001）—— 一律照常返回。
+      推送那条路必须有封面图、必须有凭据；复制这条路只复制文字也完全正当，
+      它存在的意义就是"微信 API 走不通的时候还有办法把文章发出去"。
+
+    ★ 返回整篇 HTML（几十到几百 KB），理由和 WeChatPublishDetailView 一样：
+      这是单对象详情接口，不是列表（列表一页 10 条会变成 MB 级响应体，
+      所以 WeChatPublishListSerializer 才刻意不带 content_html）。
+
+    ★ 不加限流：纯读、不调外部服务、不写库 —— 查配图列表的接口同样没加。
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request: Request, article_id) -> Response:
+        article = _get_article(request, article_id)
+        return success_response(build_article_copy_html(article=article))

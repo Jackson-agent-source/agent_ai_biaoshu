@@ -18,13 +18,26 @@ from __future__ import annotations
 
 from django.urls import path
 
-from apps.wechat.views import ArticleWeChatPublishView, WeChatPublishDetailView
+from apps.wechat.views import (
+    ArticleWeChatHtmlView,
+    ArticleWeChatPublishView,
+    WeChatPublishDetailView,
+)
 
 urlpatterns = [
     path(
         "articles/<uuid:article_id>/wechat-publishes",
         ArticleWeChatPublishView.as_view(),
         name="article-wechat-publishes",
+    ),
+    # 复制到公众号：和上面那组**完全独立** —— 不碰微信接口，不需要任何凭据。
+    # ★ 路由顺序无所谓：apps/articles/urls.py 先被 include，但它的
+    #   <uuid:article_id> 只匹配到那一段为止，带 /wechat-html 尾巴的请求
+    #   会落到这里（和 wechat-publishes 是同一个机制）。
+    path(
+        "articles/<uuid:article_id>/wechat-html",
+        ArticleWeChatHtmlView.as_view(),
+        name="article-wechat-html",
     ),
     path(
         "wechat-publishes/<uuid:publish_id>",

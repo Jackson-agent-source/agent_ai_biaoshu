@@ -9,6 +9,16 @@
 
     所以整个流程是：
         用户点"推送到公众号" → 我们建一份草稿 → 用户在手机公众号后台审核 → 手动发布
+
+★ 本文件里有**两条互不相干**的路，不要把它们合并：
+
+    publish_article_to_wechat()   走微信 API 建草稿，要凭据、要 IP 白名单、
+                                  要草稿权限、必须有封面图
+    build_article_copy_html()    只拼一份 HTML 给用户**手动复制粘贴**，
+                                  一次微信接口都不碰，什么都不需要
+
+    第二条路存在的意义就是"第一条路走不通的时候还有办法发文章"
+    （号没有草稿权限、或者用户暂时不想配 AppSecret）。
 """
 
 from __future__ import annotations
@@ -20,10 +30,11 @@ from django.utils import timezone
 
 from apps.articles.models import Article
 from apps.common.exceptions import WeChatPreconditionError, WeChatPublishError
+from apps.common.markdown_sections import section_count
 from apps.common.utils import truncate
 from apps.imaging import image_utils
 from apps.imaging.models import GeneratedImage
-from apps.imaging.services import get_cover_image, get_article_images
+from apps.imaging.services import get_article_images, get_cover_image, public_file_url
 from apps.wechat.client import WeChatClient, get_wechat_client
 from apps.wechat.html_builder import build_wechat_html
 from apps.wechat.models import WeChatPublish
@@ -304,3 +315,83 @@ def _find_previous_media_id(article: Article) -> str:
 def get_publish_history(article: Article):
     """推送历史，最新的在前。"""
     return WeChatPublish.objects.filter(article=article).order_by("-created_at")
+
+
+# ---------------------------------------------------------------------------
+# 复制到公众号（不走微信 API 的那条路）
+# ---------------------------------------------------------------------------
+def _copy_image_url(image: GeneratedImage) -> str:
+    """复制路径的取图地址。
+
+    ★ 优先用已经上传到微信的 mmbiz 地址（如果有的话）：它在 https 的
+      mmbiz.qpic.cn 上，粘进公众号编辑器必定显示得出来。
+      从没推过（公众号没有草稿权限、或者用户根本没配 AppSecret）才退回本站地址 ——
+      那条路能不能显示取决于公众号编辑器会不会替我们把外链图重新上传，
+      而 mmbiz 那条不用赌。
+
+    ★ 所以响应里会**混着两种域名**，这是故意的，不要"统一"成一种。
+    """
+    return (getattr(image, "wechat_url", "") or "") or public_file_url(image)
+
+
+def build_article_copy_html(*, article: Article) -> dict:
+    """拼一份"复制到公众号"用的正文 HTML。
+
+    ★ 不含标题/作者/摘要 —— 公众号编辑器把它们当三个独立的输入框，
+      塞进正文里反而要用户手动删掉。
+
+    ★ 和推送路径（publish_article_to_wechat）的三点不同，都是刻意的：
+
+        1. **不要求有配图**。推送必须有封面图（微信 draft/add 的硬要求），
+           而复制只复制文字是完全正当的用法。
+        2. **完全不碰微信接口**。不查凭据、不查 wechat_url、不上传。
+           公众号没有草稿权限（48001）的号照样能用这个功能 ——
+           这正是它存在的意义，tests 里有一条专门守着这一点。
+        3. 图片来源优先 mmbiz 地址，没有就用本站地址（见 _copy_image_url）。
+
+    返回 {"html", "image_count", "section_count", "warning"}。
+    """
+    succeeded = get_article_images(article).filter(
+        status=GeneratedImage.Status.SUCCEEDED
+    )
+    # ★ 有图片文件才算数。image_file 为空的记录进 build_wechat_html 也只会被丢掉。
+    with_file = list(succeeded.exclude(image_file=""))  # FileField 空值是空串不是 NULL
+    no_file = succeeded.count() - len(with_file)
+
+    # ★ 先在这里把地址算出来，取不到地址的图**提前摘掉**，而不是留给
+    #   build_wechat_html 内部跳过。否则 image_count 会按"候选张数"报，
+    #   而 html 里其实一张图都没有 —— 前端会告诉用户"已复制正文和 3 张配图"，
+    #   用户粘过去发现没图。image_count 必须等于**真的拼进去了几张**。
+    images = [image for image in with_file if _copy_image_url(image)]
+    no_url = len(with_file) - len(images)
+
+    html = build_wechat_html(
+        markdown=article.content_markdown or "",
+        images=images,
+        src_getter=_copy_image_url,
+    )
+
+    warnings: list[str] = []
+    if no_file > 0:
+        warnings.append(f"有 {no_file} 张配图没有图片文件，没有复制进去。")
+
+    # ★ 只有真有图被丢下的时候才提地址的事 —— 纯文字复制根本不需要图片地址，
+    #   没配 MEDIA_PUBLIC_BASE_URL 也完全正常，不该给用户报一个假的警告。
+    if no_url > 0:
+        base = (getattr(settings, "MEDIA_PUBLIC_BASE_URL", "") or "").strip()
+        if not base:
+            warnings.append(
+                f"有 {no_url} 张配图没有复制进去：服务器还没有配置图片的对外地址。"
+                "请在服务器的 .env 里加一行 MEDIA_PUBLIC_BASE_URL=http://<公网IP>:8080"
+                "（★ 端口号不能省），改完执行 docker compose up -d backend。"
+            )
+
+    return {
+        "html": html,
+        "image_count": len(images),
+        # ★ 这里必须复用 section_count()，不要自己数 "## " 的个数：
+        #   它等于 len(split_markdown_sections()) - 1，也就是 build_wechat_html
+        #   内部用的那个 last_index —— 同一个函数才能保证和配图接口的口径一致。
+        "section_count": section_count(article.content_markdown or ""),
+        "warning": "".join(warnings),
+    }
