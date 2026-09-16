@@ -51,9 +51,9 @@ def public_file_url(image: GeneratedImage) -> str:
       mp.weixin.qq.com/media/... ，图必裂。两边的要求不同，不是自相矛盾。
 
     ★★ 绝对不要用 request.build_absolute_uri() 来兜底。frontend/nginx.conf 用的是
-       `proxy_set_header Host $host`，而 nginx 的 $host **不带端口**，
-       于是它会给出 http://<IP>/media/...（少了 :8080）—— 那个地址会打到宝塔占着的
-       80 端口。而它的症状（粘过去图看不见）和"https 页面里的 http 图片被浏览器拦掉"
+       `proxy_set_header Host $host`，而 nginx 的 $host 由请求头决定、且**不带端口**，
+       于是它会给出 http://<IP>/media/... 这种地址 —— 漏了端口、协议还可能不对。
+       而它的症状（粘过去图看不见）和"https 页面里的 http 图片被浏览器拦掉"
        一模一样，极难分辨。所以基地址只从配置读，不从请求里猜。
 
     ★ 没配 MEDIA_PUBLIC_BASE_URL 时返回空串而不是相对路径：

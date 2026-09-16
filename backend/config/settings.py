@@ -92,11 +92,12 @@ CSRF_TRUSTED_ORIGINS = (
 # ---------------------------------------------------------------------------
 # 生产环境安全开关
 # ---------------------------------------------------------------------------
-# ★ USE_HTTPS 是给**未来**留的开关，不是现在要打开的。
+# ★ 域名 + Let's Encrypt 证书就位之后，把 .env 里的 USE_HTTPS 改成 True，
+#   下面这一整块会自动全部生效，代码一个字都不用改。
+#   完整步骤（签证书、nginx 两个 server 块、续期钩子）见 README 12.10。
 #
-# 当前部署只有公网 IP、没有域名，所以拿不到证书，只能走 http://。
-# 一旦你买了域名 + 签了 Let's Encrypt 证书，把 .env 里的 USE_HTTPS 改成 True，
-# 下面这一整块会自动全部生效，代码一个字都不用改。
+# ★ 打开它的前提是**外面真的有一层 HTTPS 终结**（nginx 的 443 块）。
+#   在纯 HTTP 环境打开 = 无限重定向。
 USE_HTTPS = env_bool("USE_HTTPS", False)
 
 # 是否启用 whitenoise 来提供静态文件（Admin 的 CSS 就靠它）。
@@ -127,8 +128,34 @@ if not DEBUG:
         #   直接映射到公网，攻击者自己发一个 X-Forwarded-Proto: https 就能骗过
         #   Django。"不设"比"设了指望它没事"省心。
         SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-        SECURE_HSTS_SECONDS = 31536000  # 1 年
-        SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+
+        # ★ HSTS 的三个值都做成可配的，因为"打开"和"开多大"是两件事。
+        #
+        #   下面这两个默认值 = 历史行为，一个字没改；部署模板
+        #   （.env.deploy.example）给的是更保守的值：先 300 秒。
+        #
+        #   为什么要先短后长：HSTS 本身不是不可逆的（浏览器再看到
+        #   max-age=0 就解除），真正的风险是**一年 max-age 生效期间
+        #   HTTPS 一旦挂掉，浏览器会拒绝回退到明文** ——
+        #   等于把一次配置事故放大成一年。稳定一周后再拉长到 31536000。
+        SECURE_HSTS_SECONDS = env_int("SECURE_HSTS_SECONDS", 31536000)
+        # ★ 含子域会把**这个域名的所有子域**一起锁进 HTTPS。
+        #   这个域名以后还要给别的服务用 HTTP 的话，设成 False。
+        SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", True)
+        # ★ preload 一旦进了浏览器内置列表，想移除要等很久（各个浏览器
+        #   发版周期以月计），而且我们并没有提交过。刻意留成可配但默认关。
+        SECURE_HSTS_PRELOAD = env_bool("SECURE_HSTS_PRELOAD", False)
+
+        # ★ 给容器自己的 healthcheck 留一条**不跳转**的路。
+        #
+        #   backend 镜像的 HEALTHCHECK 打的是 http://127.0.0.1:8000/health/，
+        #   打开 SECURE_SSL_REDIRECT 之后它会拿到 301 —— 而 `curl -f`
+        #   只把 4xx/5xx 当失败，**3xx 照样返回 0**。结果是容器一直显示
+        #   healthy，但这个探针其实已经不证明业务层能跑了（假警报）。
+        #
+        #   regex 匹配的是**去掉开头斜杠**的路径，所以写 ^health/$ 而不是
+        #   ^/health/$。这里是公开的健康检查端点，不含任何敏感信息。
+        SECURE_REDIRECT_EXEMPT = [r"^health/$"]
 
     SECURE_CONTENT_TYPE_NOSNIFF = True
     X_FRAME_OPTIONS = "DENY"
@@ -320,17 +347,20 @@ MEDIA_ROOT = BASE_DIR / "media"
 # 只被 apps/imaging/services.public_file_url() 用。粘进 mp.weixin.qq.com 的 HTML
 # 必须带**绝对**地址 —— 相对路径在那里会被解析成 mp.weixin.qq.com/media/...。
 #
-# ★★ **必须带端口**，和上面的 WEB_PORT 保持一致，例如 http://203.0.113.10:8080。
-#    漏掉端口的症状是"复制出来的正文文本完全正常、图片全是裂的"，
-#    而且要和"https 页面拦 http 图片"区分开，很难查。
+# ★★ **必须和网站本身同源**，例如 https://你的域名（不带端口号）。
+#
+#    两种写错的症状都是"复制出来的正文文本完全正常、图片全是裂的"，
+#    而且很难和别的原因区分：
+#      · 线上是 https、这里写了 http://... -> 粘到公众号后被浏览器按
+#        **混合内容**拦掉（这是最常见的一种）
+#      · 漏掉端口号而网站又确实跑在 8080 上 -> 地址打到了别的端口
 #
 # ★ 刻意**不**回退到 SITE_ORIGIN：它的默认值（本文件末尾）是 http://localhost:5173，
-#   而线上 .env 里那一项（照 .env.deploy.example 抄的）是 http://<IP> —— 恰恰少了端口。
 #   拿它当兜底等于把上面那个坑从后门放进来，而且因为值非空、连 warning 都不会发。
 #
 # ★ 留空 = 复制时跳过所有配图并提示用户去配（宁可少图，也不要一墙裂图）。
-#   将来域名 + HTTPS 配好之后，把这里改成 https://你的域名 即可，代码一个字都不用动 ——
-#   这同时也是解决"https 页面里的 http 图片会被浏览器按混合内容拦掉"的正路。
+#   上了 HTTPS 之后填 https://你的域名 —— 这同时也是解决"https 页面里的
+#   http 图片会被浏览器按混合内容拦掉"的正路。
 MEDIA_PUBLIC_BASE_URL = env_str("MEDIA_PUBLIC_BASE_URL", "").rstrip("/")
 
 # Django 4.2+ 用 STORAGES 取代了旧的 STATICFILES_STORAGE
@@ -545,7 +575,7 @@ ADMIN_URL_PATH = env_str("ADMIN_URL_PATH", "admin/")
 
 # 网站前端的对外地址。只被根路径那个 JSON 提示页用来拼提示语。
 #   本地开发：Vite dev server 在 5173（默认值）
-#   线上部署：前后端同源，填 http://<你的公网IP>
+#   线上部署：前后端同源，填 https://<你的域名>（不带端口号）
 SITE_ORIGIN = env_str("SITE_ORIGIN", "http://localhost:5173").rstrip("/")
 
 

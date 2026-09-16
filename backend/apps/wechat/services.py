@@ -382,8 +382,9 @@ def build_article_copy_html(*, article: Article) -> dict:
         if not base:
             warnings.append(
                 f"有 {no_url} 张配图没有复制进去：服务器还没有配置图片的对外地址。"
-                "请在服务器的 .env 里加一行 MEDIA_PUBLIC_BASE_URL=http://<公网IP>:8080"
-                "（★ 端口号不能省），改完执行 docker compose up -d backend。"
+                "请在服务器的 .env 里加一行 MEDIA_PUBLIC_BASE_URL=https://<你的域名>"
+                "（★ 要和网站本身同源、带 https:// 前缀、不带端口号），"
+                "改完执行 docker compose up -d backend。"
             )
 
     return {

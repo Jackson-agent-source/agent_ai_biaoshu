@@ -431,18 +431,20 @@ npm run dev
 
 | 变量 | 说明 |
 | --- | --- |
-| `MEDIA_PUBLIC_BASE_URL` | 配图的对外基地址，例如 `http://203.0.113.10:8080`。**端口号不能省** |
+| `MEDIA_PUBLIC_BASE_URL` | 配图的对外基地址，就是网站本身的地址，例如 `https://你的域名`。**要和网站同源，别带端口号** |
 
 > ★ 为什么必须显式配：复制出去的 HTML 会被粘到 `mp.weixin.qq.com` 上，
 > 相对路径在那里会被解析成 `mp.weixin.qq.com/media/...`，图必裂。
-> 而地址**不能**从请求头猜 —— nginx 的 `proxy_set_header Host $host` 不带端口，
-> 猜出来是 `http://<IP>/media/...`（少了 `:8080`），那会打到宝塔占着的 80 端口上。
+> 而地址**不能**从请求头猜 —— nginx 的 `proxy_set_header Host $host` 拿到的是
+> 请求方给的值、而且不带端口，猜出来的地址既不可信也不完整。
 > 症状和"图片被浏览器拦掉"一模一样，极难分辨。
 >
 > ★ 没填时后端**会跳过所有配图**并在界面上提示你去填，正文照常复制 ——
 > 宁可少图，也不要给你一墙裂图。
 >
-> ★ 将来域名解析好、上了 HTTPS，把这一项改成 `https://你的域名` 即可，代码不用动。
+> ★ **上了 HTTPS 之后这一项必须跟着变成 `https://`**：页面是 https 而图片是 http 的话，
+> 浏览器会按**混合内容**把它们全部拦掉。这正是 12.10 要解决的问题之一。
+> 改这一项只需要 `docker compose up -d backend`，**前端一个字都不用动**。
 
 > ★★ **图片能不能粘过去，取决于公众号编辑器**：如果它在粘贴时把图**重新上传**
 > 到微信自己的服务器（秀米/135 那些排版工具就是这么工作的），那纯 HTTP 也能用；
@@ -910,6 +912,19 @@ URL 安全校验      → 防 SSRF，只允许 http/https，禁内网
 多 worker 下老的 `/cgi-bin/token` 会互踢导致偶发 `40001`，
 `stable_token` 就是微信为这个问题提供的正解。
 
+### 11. 传输层必须是 HTTPS
+
+上面 10 条防的都是「密钥/凭据别泄漏出去」，但**只要传输层是明文，全都白搭**：
+用户的 token 存在浏览器 localStorage 里，每个请求都以
+`Authorization: Token xxx` 明文发送，同一个 WiFi 下谁都能抓走并冒充登录。
+
+所以 **HTTPS 不是「有空再做的优化」，是这个项目能拿出去用的前提**。
+部署时必须走 12.10 那条路（域名 + Let's Encrypt + `USE_HTTPS=True`），
+不能停在「只有 IP 的 8080」上。
+
+> ★ 顺带一提，这也是「复制到公众号」的配图能不能显示的前提：
+> `https://` 页面里的 `http://` 图片会被浏览器按混合内容拦掉。
+
 ---
 
 ## 十一、跑测试
@@ -971,18 +986,33 @@ cd ../frontend && npm run build         # 前端类型检查 + 打包
 
 ## 十二、部署到云服务器
 
-这一节假设：**Ubuntu / Debian，只有公网 IP、没有域名，给一小群人用。**
+这一节假设：**Ubuntu / Debian，有域名，走 HTTPS，给一小群人用。**
+
+> ★ 域名 + HTTPS 不是"锦上添花"，是**必需品**：只有 IP 的话登录凭证是明文在
+> 公网上跑的（详见 12.10 开头的解释）。所以部署流程里签证书那一步不能跳。
+>
+> ★ 服务器在**境外**的话不需要 ICP 备案，80/443 直接用；**境内**服务器必须备案
+> 之后 80/443 才通，没备案就只能先用 8080 这样的高位端口。
+>
+> ★ 确实没有域名、只能纯 HTTP 跑（临时测试）？把 `.env` 的 `WEB_PORT` 改回
+> `8080`、`USE_HTTPS` 设成 `False`，并把 `frontend/nginx.conf` 里的 443 块
+> 和 80 块的跳转注释掉。12.4 里有说明。
 
 ### 12.1 部署后长什么样
 
 ```
                         ┌─────────────────────────────────────────┐
-   浏览器 ──── 80 ───▶  │  web 容器（nginx）                        │
-   http://<IP>          │   ├─ /                    → 前端静态文件   │
-                        │   ├─ /api/ /admin/ /health/               │
-                        │   │        → 反代 http://backend:8000     │
-                        │   ├─ /static/             → 反代 backend   │
-                        │   └─ /media/              → 命名卷 uploads │
+   浏览器 ── 80 ──▶     │  web 容器（nginx）                        │
+   http://<域名>        │   80 块：只看三件事                        │
+     │                  │     ├─ /healthz           → 200（容器探活）│
+     │  301 跳转         │     ├─ /.well-known/...   → 证书续期验证   │
+     ▼                  │     └─ 其余              → 301 跳 HTTPS    │
+   https://<域名> ─443─▶│   443 块：真正的站点                       │
+                        │     ├─ /                  → 前端静态文件   │
+                        │     ├─ /api/ /admin/ /health/              │
+                        │     │        → 反代 http://backend:8000    │
+                        │     ├─ /static/           → 反代 backend   │
+                        │     └─ /media/            → 命名卷 uploads │
                         └─────────────────────────────────────────┘
                                      │ 容器内网，不映射到宿主机
                         ┌────────────▼────────────────────────────┐
@@ -992,8 +1022,10 @@ cd ../frontend && npm run build         # 前端类型检查 + 打包
                         │  db 容器（mysql:8.0）                     │
                         └─────────────────────────────────────────┘
 
+   宿主机上的 certbot：签发/续期证书 → /etc/letsencrypt（只读挂进 web 容器）
    命名卷：mysql_data（全部文章和账号）  uploads（全部配图）
    ★ 两个卷都不能丢，`docker compose down -v` 会同时删掉它们，见 12.9
+   ★ 证书**不用**备份（丢了能重签），见 12.10 末尾
 ```
 
 **图片为什么要单独走一条路？**
@@ -1006,9 +1038,10 @@ worker（只有 3×4=12 个）**，图上多一点就能把 API 请求饿死。
 
 **为什么让 nginx 同时管前端和接口（同源）？**
 
-前端构建时 `VITE_API_BASE_URL=/api/v1` 是**相对路径**，请求自动打到同一个 `IP:80`。
+前端构建时 `VITE_API_BASE_URL=/api/v1` 是**相对路径**，请求自动打到同一个域名。
 于是 CORS 预检、跨域 Cookie 这一整类问题**根本不会发生**，
-`.env` 里也不用填 IP。将来买了域名，只要改 nginx，**前端一个字都不用动、不用重新构建**。
+`.env` 里也不用填域名。将来换域名，只要改 nginx 和 `.env`，
+**前端一个字都不用动、不用重新构建**。
 
 **为什么 backend 和 db 用 `expose` 而不是 `ports`？**
 `expose` 只在容器网络内可见，**不映射到宿主机**。这样即使防火墙配错了，
@@ -1032,31 +1065,46 @@ sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
 sudo mkswap /swapfile && sudo swapon /swapfile
 echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
-# 3. 防火墙：只开 22 和 80（★ 装了宝塔的话看下面的说明，别用 UFW）
-sudo ufw allow 22/tcp && sudo ufw allow 80/tcp && sudo ufw enable
+# 3. 防火墙：只开 22、80 和 443（★ 装了宝塔的话看下面的说明，别用 UFW）
+sudo ufw allow 22/tcp && sudo ufw allow 80/tcp && sudo ufw allow 443/tcp && sudo ufw enable
 # ★ 不要开 8000 / 3306 / 5173
 
-# 4. ★★★ 去云厂商控制台的安全组里，放行 80 端口的入方向流量
+#    ★ 80 和 443 两个都要开：80 负责「跳转到 HTTPS」和证书续期验证，
+#      少开 80 的话证书 90 天后会续期失败。
+
+# 4. ★★★ 去云厂商控制台的安全组里，放行 80 和 443 端口的入方向流量
 #    安全组是独立于 UFW 的第二道墙。UFW 全配对了但网页打不开，99% 是这里没放行。
+#    ★ 还有一点容易踩：Docker 是通过 iptables 直接下发端口映射的，**绕过 UFW** ——
+#      所以"我 UFW 没开 80 但网页能打开"是正常的，真正说了算的是安全组。
 ```
 
-> ### ★ 服务器上装了宝塔面板的话，这一节要改两处
+> ### ★ 服务器上装了宝塔面板的话
 >
 > **① 不要用 UFW，改用宝塔的「安全」页面。**
 > 宝塔自己在管 iptables / firewalld，再开一个 UFW 两套规则会互相打架，
-> 而且宝塔会弹警告。放行端口请去 **宝塔 → 安全 → 添加端口规则**。
-> 已经手贱开了 UFW 的话：`sudo ufw disable`。
+> 而且宝塔会弹警告。放行端口请去 **宝塔 → 安全 → 添加端口规则**，
+> 加 80 和 443。已经手贱开了 UFW 的话：`sudo ufw disable`。
 >
-> **② 端口从 80 改成 8080。**
-> 宝塔自带一个 nginx 占着 80。所以 `.env` 里用默认的 `WEB_PORT=8080`，
-> 浏览器访问 `http://<IP>:8080`，**宝塔那边一个字都不用动**。
-> 用 80 的话 `docker compose up` 会直接报：
-> `Bind for 0.0.0.0:80 failed: port is already allocated`
+> **② 宝塔自带的 nginx 必须停掉，而且要禁止自启。**
+> 它占着 80，我们的 `web` 容器也要用 80，两个进程抢一个端口的结果是
+> 容器根本起不来：`Bind for 0.0.0.0:80 failed: port is already allocated`。
 >
-> 跑通之后如果想让地址干净一点（不带端口号），再去
+> ```bash
+> sudo systemctl stop nginx
+> sudo systemctl disable nginx     # ★ 只 stop 不够：机器一重启它又抢回去
+> ```
+>
+> 想反悔：`sudo systemctl enable --now nginx`。
+>
+> **⚠️ 这会连带停掉宝塔面板和它上面可能有的其他站点。**
+> 这台机器上还有别的网站的话，别停 —— 改成让宝塔做反向代理：
 > **宝塔 → 网站 → 添加站点 → 反向代理**，目标填 `http://127.0.0.1:8080`，
-> 同时把 `.env` 里的 `WEB_BIND` 改成 `127.0.0.1`。
-> 好处是将来买了域名可以用宝塔一键上 HTTPS，见 12.10。
+> 同时把 `.env` 里的 `WEB_BIND` 改成 `127.0.0.1`，然后按 12.10 用宝塔那边
+> 签证书、让宝塔监听 443，我们的 `web` 容器只监听 8080、不开 443。
+> （那条路本文不展开，两套 nginx 会让排查变复杂，能不用就不用。）
+>
+> > 早期版本这里写的是「用 8080 + 宝塔一键 SSL」，那是在**没有域名**的
+> > 前提下写的。现在有域名了，让一个 nginx 独占 80/443 更简单，见 12.10。
 
 ---
 
@@ -1130,21 +1178,32 @@ nano .env                         # 按下面的说明逐项改
 >
 > （本机开发仍然是另一回事 —— 那时用的就是 `backend/.env`，见第五节。）
 
-**必须改的六项：**
+**必须改的九项：**
 
 | 变量 | 怎么填 | 填错的症状 |
 | --- | --- | --- |
 | `DJANGO_SECRET_KEY` | `openssl rand -base64 48` | 容器启动时被 entrypoint 直接拒绝 |
-| `ALLOWED_HOSTS` | `<你的公网IP>,127.0.0.1,localhost` | Django 返回 `400 Invalid HTTP_HOST header`，**而且不告诉你它期望什么** |
-| `CSRF_TRUSTED_ORIGINS` | `http://<你的公网IP>` | `/admin/` 登录时 403 |
+| `PUBLIC_HOST` | 你的域名，**不带 `https://`、不带结尾斜杠** | nginx 起不来，报找不到证书文件 |
+| `ALLOWED_HOSTS` | `<你的域名>,127.0.0.1,localhost` | Django 返回 `400 Invalid HTTP_HOST header`，**而且不告诉你它期望什么** |
+| `CSRF_TRUSTED_ORIGINS` | `https://<你的域名>` | 后台登录时 403 |
+| `SITE_ORIGIN` | `https://<你的域名>` | 只影响根路径那句提示语 |
+| `MEDIA_PUBLIC_BASE_URL` | `https://<你的域名>` | 「复制到公众号」粘出去图全是裂的 |
+| `USE_HTTPS` | `True` | Cookie 不加密、不跳转、不发 HSTS —— 等于 HTTPS 白配了 |
 | `DB_PASSWORD` / `DB_ROOT_PASSWORD` | `openssl rand -base64 32 \| tr -d '/+='` | 数据库连不上 |
 | `LLM_API_KEY` | 你的 DeepSeek Key | 生成时报「调用大模型失败」 |
-| `SEARCH_API_KEY` | 你的 Tavily Key | 能生成，但会说「未能获取到任何外部资料」 |
 
-**要用配图和推送公众号，再补这八项**（不填不影响生成文章，只影响对应功能）：
+> ★ **`PUBLIC_HOST` 必须和证书签给的那个名字完全一致**（certbot 的 `-d` 参数），
+> 因为 nginx 是按 `/etc/letsencrypt/live/<PUBLIC_HOST>/` 去找证书的。
+> 填错就是 nginx 起不来，报错里会出现你填的这个名字 —— 这时先回来对一下这里。
+>
+> ★ 证书要先签好再 `up`，顺序见 12.10 —— **这是本节的第 0 步**，
+> `git pull` 和 `docker compose up -d --build` 都得排在它后面。
+
+**要用搜索和推送公众号，再补这些**（不填不影响生成文章，只影响对应功能）：
 
 | 变量 | 怎么填 | 填错的症状 |
 | --- | --- | --- |
+| `SEARCH_API_KEY` | 你的 Tavily Key | 能生成，但会说「未能获取到任何外部资料」 |
 | `IMAGE_API_KEY` | 生图服务的 Key | 配图报「配图生成服务暂时不可用」 |
 | `IMAGE_BASE_URL` | 中转站地址，**必须带 `/v1` 结尾** | 同上（`message` 里会点名缺哪个变量） |
 | `IMAGE_MODEL` | 照中转站**实际提供**的模型名填 | 生图返回 404 / 模型不存在 |
@@ -1167,13 +1226,14 @@ nano .env                         # 按下面的说明逐项改
 **三个最容易踩的坑，每个都单独说一遍：**
 
 **① `ALLOWED_HOSTS` 里的 `127.0.0.1` 不能删。**
-容器健康检查请求的是 `http://127.0.0.1:8000/health/`。删了它，
-容器会永远是 `unhealthy` 状态 —— 而 `docker compose ps` 只会显示一个状态，
+容器健康检查（`backend` 自己的、以及 12.10 里新增的那条）都要走本机地址。
+删了它，容器会永远是 `unhealthy` 状态 —— 而 `docker compose ps` 只会显示一个状态，
 **不会告诉你为什么**。
 
-**② `CSRF_TRUSTED_ORIGINS` 必须带 `http://` 前缀。**
-写 `203.0.113.10` 是**不生效**的，而且 Django **不会报错、只会默默拒绝**。
-必须写 `http://203.0.113.10`。
+**② `CSRF_TRUSTED_ORIGINS` 的协议前缀必须和实际访问方式一致。**
+上了 HTTPS 就写 `https://<你的域名>`。写 `https://` 却用 `http://` 访问、
+或者反过来，Django **不会报错、只会默默拒绝**，表现是后台登录 403。
+（写域名却不带协议前缀也是不生效的，同样不报错。）
 
 **③ 数据库密码里避开 `$` 符号。**
 docker compose 会对 `.env` 做变量展开，`P@ss$word` 里的 `$word` 会被
@@ -1260,10 +1320,15 @@ ALLOW_REGISTRATION=False
 
 ### 12.6 构建、启动、建管理员
 
+> ★★★ **先把证书签好再往下走。** `nginx.conf` 的 443 块会去加载
+> `/etc/letsencrypt/live/<域名>/fullchain.pem` —— 文件不存在的话
+> nginx **直接起不来**（容器会一直 Restarting）。
+> 完整步骤见 12.10 的第 1 步，那一步现在**排在本节前面**。
+
 ```bash
 docker compose build              # ★ 先构建（前端构建最慢，3~5 分钟）
 docker compose up -d              # 再启动
-docker compose ps                 # db / backend 应该是 healthy，web 是 Up
+docker compose ps                 # db / backend / web 三个都应该是 healthy
 ```
 
 **看到 `Restarting` 就立刻看日志：**
@@ -1304,36 +1369,52 @@ docker compose exec backend python manage.py createsuperuser
 ### 12.7 验证清单（照着做一遍）
 
 ```bash
-curl -i http://localhost/health/          # 期望 200 + {"success":true}
+curl -i http://<域名>/health/             # 期望 301（证书链路的跳转是好的）
+curl -i https://<域名>/health/            # 期望 200 + {"success":true}
+curl -i http://<域名>/healthz             # 期望 200 + "ok"（web 容器自己的探活）
 curl -i http://<IP>:8000/                 # 期望「连接被拒」—— 这是正确结果
 docker compose logs backend | grep -i traceback    # 期望没有任何输出
 docker compose exec backend ls /app/media            # ★ 卷挂上了没（空目录也正常，说明挂着）
 docker compose exec web ls /var/www/media            # ★ nginx 那一侧只读挂载也得有
 ```
 
+> ★ 第 1、2 条一起看才说明问题：只有 301 **且** https 那侧 200，
+> 才证明「证书能用 + 跳转生效」。
+>
+> ★ 12.10 里还有一份**专门针对 HTTPS 的**验证清单（证书有效期、静态文件不跳转、
+> 自动续期配置），上线时两份都要过。
+
 然后**必须用浏览器**（不能用 curl 代替，要验证的是 nginx + 浏览器的真实行为）：
 
 | 验证项 | 期望结果 | 失败时先查 |
 | --- | --- | --- |
-| 打开 `http://<IP>/` | 登录页正常，**F12 无 CORS 报错** | nginx 日志 |
+| 打开 `https://<域名>/` | 登录页正常，**地址栏是绿锁**，F12 无 CORS 报错 | 12.10 的证书那几条 |
 | **在文章详情页按 F5** | 正常显示，不是 404 | `nginx.conf` 的 `try_files` 那行 |
 | 生成一篇文章，掐表 | **2 分钟内出结果，无 504** | nginx `proxy_read_timeout` / LLM Key |
 | 连点生成按钮 | 出现**中文**「操作太频繁了，请稍后再试」 | 限流配置 |
 | 跑到单用户额度上限 | 出现「达到每日上限（20 篇）」 | 额度配置 |
 | **生成一张配图** | 图能显示出来（**不是裂图**） | 见下面那条「配图专项」 |
+| **点一次「复制到公众号」** | 提示已复制；粘进公众号编辑器后**文字和配图都在** | 12.10 的「复制到公众号」那条 |
 | **推送到公众号草稿箱** | 提示成功，去公众号后台草稿箱能看到文章和封面 | 12.11 的 `40164` / `48001` 两行 |
-| 打开 `http://<IP>/admin/` | **404**（因为已经换路径了） | — |
-| 打开 `http://<IP>/<你的后台路径>` | 后台能登录，**CSS 正常显示** | `collectstatic` / whitenoise |
+| 打开 `https://<域名>/admin/` | **404**（因为已经换路径了） | — |
+| 打开 `https://<域名>/<你的后台路径>` | 后台能登录，**CSS 正常显示** | `collectstatic` / whitenoise / `/static/` 的 `X-Forwarded-Proto`（见 12.10） |
 
-**最后两条特别值得做：**
+**最后三条特别值得做：**
 
 - 后台 CSS 正常 = 静态文件链路（whitenoise + `/static/` 反代 + `collectstatic`）整条是通的。
+  ★ 上了 HTTPS 之后这一条还多一层含义：它同时证明 `/static/` 那个 location 带上了
+  `X-Forwarded-Proto`。少了它，Django 会把每个 CSS 请求 301 到 https 再 301 回来，
+  症状恰好就是「后台能登录但没样式」，和 `collectstatic` 没跑是同一个表现 —— 见 12.10。
 - **配图能显示 = `uploads` 卷 + nginx 的 `/media/` 反代整条是通的。**
   这一条要专门验证，因为它跨了三个组件（backend 写入 → 命名卷 → nginx 只读挂载），
   而且**坏掉时的表现是「图片 404」而不是报错** —— 前端只会显示一个裂图，
   页面上其它一切正常，非常容易被当成「图生成坏了」而去查生图服务。
   F12 → Network 里看那个图片请求：**404 说明是卷或 nginx 的问题**，
   200 但图是破的才是生图的问题。
+- **「复制到公众号」要单独实测**，因为它依赖的浏览器能力在 HTTP 和 HTTPS 下**不一样**：
+  只有 HTTPS（安全上下文）下 `navigator.clipboard` 才存在，代码会走这条路；
+  HTTP 下走的是 `execCommand` 兜底。**上线前后是两条不同的代码路径**，
+  不能因为「上线前能用」就跳过这条。
 
 **配图专项排查（一条命令定位是哪一层断的）：**
 
@@ -1343,7 +1424,7 @@ docker compose exec backend ls -R /app/media | head -20
 # 2. nginx 那边看得到吗？（看不到 = 卷挂载写错了）
 docker compose exec web ls -R /var/www/media | head -20
 # 3. nginx 认得这条路由吗？（期望不是 404）
-curl -I http://localhost/media/<随便一个真实文件名>
+curl -I https://<域名>/media/<随便一个真实文件名>
 ```
 
 > 第 3 步**必须用文件名真的存在的那张图**，随便编一个路径得到 404 是正常的 ——
@@ -1357,8 +1438,12 @@ curl -I http://localhost/media/<随便一个真实文件名>
 ```bash
 git pull                          # 方案 B 的话改成重新 rsync 一次
 docker compose up -d --build
-docker compose restart nginx      # ★★★ 这一行不能省
+docker compose restart web        # ★★★ 这一行不能省
 ```
+
+> ★ 服务名是 **`web`**，不是 `nginx` —— 写 `docker compose restart nginx`
+> 会直接报 `no such service: nginx`（早期版本的 README 里就是这么写错的）。
+> 三个服务叫 `web` / `backend` / `db`。
 
 > **为什么必须重启 nginx？**
 > nginx 在启动时解析 `proxy_pass http://backend:8000` 里的主机名，
@@ -1381,6 +1466,18 @@ docker compose restart nginx      # ★★★ 这一行不能省
 nano .env
 docker compose up -d backend      # ★ 这一句才会让新配置生效（重建容器）
 ```
+
+> ★ 改了哪一项就重建哪个服务 —— `up -d` 后面**不带服务名**就是全部重建，
+> 拿不准时这么写最省事：
+>
+> | 改的变量 | 要重建 |
+> | --- | --- |
+> | `PUBLIC_HOST` / `WEB_PORT` / `HTTPS_PORT` / `ADMIN_URL_PATH` | `web` |
+> | `ALLOWED_HOSTS` / `CSRF_TRUSTED_ORIGINS` / `USE_HTTPS` / `SECURE_HSTS_*` / `SITE_ORIGIN` / `MEDIA_PUBLIC_BASE_URL` | `backend` |
+> | `DB_*` | `backend`（`db` 自己的密码改不了，见 12.11 的 `Access denied` 那行） |
+>
+> 改完 `WEB_PORT` 尤其别忘了 —— 它决定宿主机哪个端口通到 nginx 的 80，
+> 不重建的话新端口根本没被监听。
 
 > ★ **改 `.env` 之后不 `up -d` 是没用的。** 环境变量是在**容器创建时**
 > 注入进去的，改文件不会影响已经在跑的容器 —— 你会对着一个明明改对了的
@@ -1451,36 +1548,282 @@ docker run --rm -v agent_ai_biaoshu_uploads:/data -v "$HOME:/backup" alpine tar 
 
 ---
 
-### 12.10 ⚠️ 必须知道的：明文 HTTP 的代价
+### 12.10 域名 + HTTPS：把那笔账结掉
 
-**这是「只有 IP、没有域名」绕不过去的缺陷，请务必读完再决定。**
+#### 为什么这件事不能拖
 
 用户的登录凭证存在浏览器 localStorage 里，每个请求都以
-`Authorization: Token xxx` 的形式**明文**发送。这意味着：
+`Authorization: Token xxx` 的形式**明文**发送。只走 HTTP 就意味着：
 
 > **同一个 WiFi 下的任何人，都能抓到它，然后冒充这个用户登录。**
 
-**如果这一小群人都在可信网络里**（公司内网、家里），风险可以接受。
+还有第二个代价更隐蔽：**「复制到公众号」的配图能不能显示，一直是个赌。**
+`https://` 页面里的 `http://` 图片会被浏览器按**混合内容**直接拦掉，
+而粘出去的 HTML 是渲染在 `mp.weixin.qq.com` 上的 —— 那边是 https。
+所以那批图能不能活下来，取决于公众号编辑器会不会重新上传，谁也没法保证。
 
-**如果不能接受，解法只有 HTTPS，而 HTTPS 需要域名。**
-但成本比想象中低得多，而且**代码已经为这一天准备好了**：
-
-```
-1. 买个最便宜的域名（.xyz / .top，一年几十块）→ A 记录指向服务器 IP
-2. certbot 签一张 Let's Encrypt 证书（免费，自动续期）
-3. nginx 里加 443 的 server 块 + 证书路径
-4. .env 里把 USE_HTTPS 改成 True，重启后台
-```
-
-第 4 步会一次性生效下面这些（`settings.py` 里已经写好了）：
-`SECURE_SSL_REDIRECT`（HTTP 自动跳 HTTPS）、Cookie Secure、
-HSTS、`X-Forwarded-Proto` 信任。
-
-**改动量接近零，不需要改任何业务代码。**
+上了 HTTPS，这两个问题一起消失。
 
 > `sslip.io` / `nip.io` 这类「拿 IP 当域名」的服务理论上也能签证书，
 > 但 Let's Encrypt 对这类共享域名有严格速率限制且不受你控制，
-> **不建议依赖**。
+> **不建议依赖**。自己买个最便宜的域名（.xyz / .top，一年几十块）就行。
+
+#### 上 HTTPS 要动的东西（都在这个仓库里，已经改好了）
+
+| 文件 | 改了什么 |
+| --- | --- |
+| `frontend/nginx.conf` | 拆成两个 server 块：80 只做跳转 + 证书验证 + 探活，443 才是真正的站点 |
+| `frontend/Dockerfile` | 新增 `PUBLIC_HOST` 环境变量；健康检查从 `/` 改成 `/healthz` |
+| `docker-compose.yml` | 挂载 `/etc/letsencrypt`（只读）和 `/var/www/certbot`；新增 443 端口映射 |
+| `backend/config/settings.py` | HSTS 三个值改成可配；新增 `SECURE_REDIRECT_EXEMPT` 豁免健康检查 |
+| `.env.deploy.example` | 新增 `PUBLIC_HOST` / `HTTPS_PORT` / `SECURE_HSTS_*`，域名相关的项全部改成 `https://` |
+
+**你要做的**是下面这几步服务器操作 —— 签证书那件事必须在第一次
+`docker compose up` **之前**做完，因为 nginx 起不来如果没有证书。
+
+---
+
+#### 第 1 步：签证书（**顺序上排在 12.6 之前**）
+
+##### 1.1 先让出 80 端口
+
+```bash
+sudo ss -lntp | grep -E ':(80|443)\s'     # 先看谁占着
+```
+
+- **没有输出** → 80/443 都空着，直接跳到 1.2。
+- **`nginx` / `bt` 占着 `:80`** → 宝塔自带的 nginx，按 12.2 那个方框里的
+  `systemctl stop nginx && systemctl disable nginx` 停掉。
+  **如果这台机器上还有别的网站，先别停** —— 方案要改成让宝塔做反向代理。
+- **别的进程占着 `:443`** → 改 `.env` 里的 `HTTPS_PORT` 换个端口，
+  nginx 配置一个字都不用动。
+
+##### 1.2 确认域名解析对了
+
+```bash
+dig +short <你的域名>       # 输出的应该就是这台服务器的公网 IP
+```
+
+没有输出、或者不是这台机器，先去域名商那边加一条 **A 记录**指过来，等生效再继续。
+**解析没生效时 Let's Encrypt 的验证必然失败**，而且失败信息不会告诉你这一点。
+
+##### 1.3 放行 80 和 443
+
+见 12.2 —— **本机防火墙和云厂商安全组是两道墙，都要开**。
+Docker 是通过 iptables 下发端口映射的、**绕过 UFW**，
+所以真正说了算的往往是安全组那一侧。
+
+##### 1.4 签发
+
+```bash
+sudo apt update && sudo apt install -y certbot
+
+# ★ 此刻应用还在 8080 上跑，80 端口是空的，所以这一步
+#   **不需要停任何容器**，也不会中断服务。
+sudo certbot certonly --standalone -d <你的域名> --email <你的邮箱> --agree-tos -n
+
+sudo ls /etc/letsencrypt/live/<你的域名>/    # 应该看到 fullchain.pem / privkey.pem
+```
+
+> **失败了怎么看**：`sudo tail -30 /var/log/letsencrypt/letsencrypt.log`。
+> 两个最常见的原因：① 域名没解析到这台机器（1.2）；
+> ② 80 端口没放行（1.3 的安全组）。
+
+> ★ 用的是 `--standalone` 而不是 webroot：webroot 要求 nginx 先跑起来服务验证文件，
+> 但 nginx 又要先有证书才能启动 —— 先有鸡还是先有蛋。
+> **首次签发这一刻不存在这个矛盾**（80 是空的），所以用 standalone 最直白。
+> 但**续期**必须换成 webroot，见第 3 步。
+
+---
+
+#### 第 2 步：填 `.env`、重建
+
+```bash
+cd /path/to/agent_ai_biaoshu
+git pull
+cp .env .env.bak-$(date +%F)     # 改坏了好回滚（.gitignore 会忽略它，不会误提交）
+nano .env                        # 按 12.4 那张表改九项
+```
+
+必改的九项见 **12.4**，其中最容易漏的是：
+
+```ini
+PUBLIC_HOST=你的域名                          # 不带 https://，不带结尾斜杠
+WEB_PORT=80                                  # 从 8080 改过来
+HTTPS_PORT=443
+ALLOWED_HOSTS=你的域名,127.0.0.1,localhost     # 127.0.0.1 不能删
+CSRF_TRUSTED_ORIGINS=https://你的域名          # ★ 必须带 https://
+SITE_ORIGIN=https://你的域名
+MEDIA_PUBLIC_BASE_URL=https://你的域名         # 不留着 http:// 的话图会被拦
+USE_HTTPS=True
+SECURE_HSTS_SECONDS=300                      # ★ 先短后长，见下面「HSTS」
+```
+
+```bash
+sudo mkdir -p /var/www/certbot    # 给第 3 步的 webroot 用
+docker compose up -d --build      # --build 是必需的：nginx.conf 和 Dockerfile 都改了
+docker compose ps                 # web / backend 都应该是 healthy
+```
+
+> ★ 到这一步 `http://<公网IP>:8080` 就失效了，换成 `https://你的域名`。
+>
+> ★ 改 `.env` 必须靠 `up -d` 才生效 —— `restart` **不会重新读 `env_file`**。
+
+---
+
+#### 第 3 步：把续期从 standalone 切到 webroot（**★ 这步不能跳**）
+
+第 1 步那一次是手工签的。certbot 装好后自带一个 systemd timer 每天跑两次
+`renew`，**但它会沿用签发时的验证方式** —— 也就是 standalone。
+而那时 80 端口已经被 `web` 容器占着了，certbot 绑不上 → **续期永远失败**。
+
+现在 nginx 已经在 80 上服务验证文件了，把方式换掉：
+
+```bash
+certbot --version
+```
+
+```bash
+# certbot >= 2.3（Ubuntu 24.04 / Debian 13 等）—— 推荐，它会顺带验证一次：
+sudo certbot reconfigure --cert-name <你的域名> --webroot -w /var/www/certbot
+
+# certbot < 2.3（Ubuntu 22.04 / Debian 12）：
+sudo certbot certonly --webroot -w /var/www/certbot -d <你的域名> --force-renewal
+```
+
+两条都是**零停机**：只往 `/var/www/certbot` 写个验证文件，不碰容器。
+
+```bash
+# 让 nginx 在续期后重新加载证书
+# （nginx 只在启动时把证书读进内存，换了文件它不会自己发现）
+sudo tee /etc/letsencrypt/renewal-hooks/post/reload-web-nginx.sh > /dev/null <<'EOF'
+#!/bin/sh
+docker compose -f /path/to/agent_ai_biaoshu/docker-compose.yml exec -T web nginx -s reload || true
+EOF
+sudo chmod +x /etc/letsencrypt/renewal-hooks/post/reload-web-nginx.sh
+```
+
+> ★ hook 里要写 compose 文件的**全路径**：certbot 的 hook 以 root 身份、
+> 在 `/` 目录下跑，用相对路径找不到文件。
+>
+> ★ 末尾的 `|| true`：即使 reload 失败（比如容器正好没在跑），
+> **续期本身已经成功、证书文件已经落盘**，不该让 hook 的返回值把这件事报成失败。
+>
+> ★ 用 post hook 而不是 `--deploy-hook`：后者**只在成功时跑**，
+> 而且得写在续期配置里；`renewal-hooks/` 下的脚本是文件形式的，最不容易配错。
+
+**为什么非要换成 webroot** —— 不是为了省那几秒，是**失败方向不一样**：
+
+| | 停/起容器（纯 standalone） | webroot（本方案） |
+| --- | --- | --- |
+| 续期的动作 | 停掉 web 容器 → certbot 占 80 → 签 → 把容器起回来 | 往目录里写一个文件，什么都不碰 |
+| 失败的后果 | 容器没起回来 → **站点一直挂着**，几天后才发现 | 证书没换成，**站点照常**，旧证书还有 30 天 |
+
+左边那个的坑在于：compose 里的 `restart: unless-stopped` 意味着
+**被手动停掉的容器不会自己回来**，连重启机器也不回来。
+
+跳过了第 3 步会怎样：站点不会挂（失败方向是安全的），
+但 60 天后证书会真的过期，浏览器开始报证书错误。
+
+---
+
+#### 第 4 步：演练一遍
+
+```bash
+sudo certbot renew --dry-run
+```
+
+用 Let's Encrypt 的**测试**服务器，不消耗正式额度。看到 `Congratulations` 就成了。
+webroot 模式下**演练期间网站不会中断**。
+
+---
+
+#### 验证清单（HTTPS 专项，和 12.7 那份一起做）
+
+```bash
+curl -I http://<域名>                        # 期望 301 → https://<域名>/
+curl -I https://<域名>                       # 期望 200
+curl -s http://<域名>/healthz                # 期望 200 + "ok"
+curl -I https://<域名>/media/<一张真实存在的图>  # 期望 200 + Content-Type: image/jpeg
+```
+
+**① ★ 静态文件那个死循环**（这一条最容易漏，而且症状会误导人）
+
+```bash
+curl -sI https://<域名>/static/admin/css/base.css | head -3
+```
+
+期望 **200**。如果是 301/302，说明 `location /static/` 少了
+`proxy_set_header X-Forwarded-Proto $scheme;` —— Django 认为请求是 http、
+301 到 https，nginx 转发时又没带这个头，于是**无限重定向**。
+症状是「后台能登录，但完全没有样式」，和 `collectstatic` 没跑一模一样。
+
+**② 证书本身**
+
+```bash
+echo | openssl s_client -connect <域名>:443 -servername <域名> 2>/dev/null \
+  | openssl x509 -noout -subject -dates -issuer
+```
+
+期望 `subject` 是你的域名、`issuer` 是 Let's Encrypt、`notAfter` 约 90 天后。
+
+**③ 续期配置真的切成 webroot 了**
+
+```bash
+sudo grep -E 'authenticator|webroot_path' /etc/letsencrypt/renewal/<域名>.conf
+# 期望：authenticator = webroot    webroot_path = /var/www/certbot
+sudo systemctl list-timers | grep certbot      # 确认 timer 是 active 的
+```
+
+**④ 浏览器**
+
+1. 打开 `https://<域名>` —— 锁是绿的
+2. **打开后台，确认有样式**（对应上面 ①）
+3. F12 → Network → 点「复制到公众号」→ 看 `wechat-html` 的响应：
+   `<img src>` 应该是 `https://<域名>/media/...`（https、无端口号）
+4. **★ 重点：把复制出来的内容粘进公众号编辑器，看图在不在。**
+   上 HTTPS 之后 `navigator.clipboard` 变成可用，代码会走**主路径**
+   （HTTP 下走的是 `execCommand` 兜底）—— 这是一次**真实的行为切换**，
+   上线前能用不代表上线后没问题，必须重测。
+   如果弹出「浏览器不允许自动复制」，把现象告诉我，我们再调
+   `frontend/src/utils/clipboard.ts`（大概率是取正文那个请求耗掉了用户手势）。
+
+---
+
+#### HSTS：先短后长
+
+`.env` 里的 `SECURE_HSTS_SECONDS` **第一次填 300（5 分钟）**，
+稳定跑一周之后再改成 `31536000`（1 年）。
+
+为什么要绕这一下：HSTS 本身不是不可逆的（浏览器再看到 `max-age=0` 就解除），
+**真正的风险是**一年 max-age 生效期间 HTTPS 一旦挂掉，
+浏览器会拒绝回退到明文 —— 等于把一次配置事故放大成一年。
+
+`SECURE_HSTS_INCLUDE_SUBDOMAINS` 默认填 `False`：
+含子域会把 `你的域名` 下面**每一个**子域都锁进 HTTPS，
+将来想在这台机器上跑点别的 http 服务会直接打不开，而且改回来要等 max-age 过期。
+
+> ★ **忘了改成一年也不会有故障**，只是 HSTS 的保护弱一些。不用紧张。
+
+---
+
+#### 几个刻意没做的事
+
+| 没做 | 为什么 |
+| --- | --- |
+| OCSP stapling（`ssl_stapling`） | Let's Encrypt 已经在 2025 年停掉了 OCSP 服务，开了只会让 nginx 白等一个不来的响应 |
+| `ssl_dhparam` | `nginx.conf` 里的 cipher 列表全是 ECDHE，没有 DHE 套件，用不上 |
+| nginx 里发 HSTS 头 | HSTS 由 Django 统一发。nginx 的 `add_header` 是**子块覆盖父块**：任何 location 里出现一个 `add_header`，server 级的所有 `add_header` 就全被丢掉 —— 两处都发只会让规则更难推理 |
+| HSTS preload | 进了浏览器内置列表想移除要等各个浏览器发版，以月计。没必要 |
+| `listen [::]:443` | Docker 默认不给容器 IPv6，加了会 `socket() failed (97: Address family not supported)` 直接起不来，而这个报错看着像端口被占，很难查 |
+| 证书进备份 | 丢了能重签。**`.env` 相反，一定要留好**（它含全部密钥，别往网盘丢） |
+
+#### 一个容易埋雷的地方
+
+**不要为了调试把 8000 端口映射出来。** `SECURE_PROXY_SSL_HEADER` 一旦配上，
+Django 会无条件信任 `X-Forwarded-Proto` 头 —— 正常情况（只有 nginx 能访问 backend）
+没问题，但任何人只要能直连 8000，就能自己发一个 `X-Forwarded-Proto: https` 骗过它。
+容器里的调试用 `docker compose exec backend ...`，不要开端口。
 
 ---
 
@@ -1497,19 +1840,26 @@ docker compose exec db mysql -u root -p -e "SHOW DATABASES;"   # 数据库通不
 | 症状 | 最可能的原因 |
 | --- | --- |
 | `docker compose ps` 一直 `Restarting` | `.env` 没配好 → `docker compose logs backend` 第一行会写清楚 |
-| 网页打不开，`curl localhost` 却正常 | **云厂商安全组**没放行 80（不是 UFW） |
-| 页面能打开，接口全部失败 | nginx 还指着旧 backend IP → `docker compose restart nginx` |
+| **`web` 一直 `Restarting`，日志里说找不到证书文件** | `.env` 的 `PUBLIC_HOST` 和证书签给的名字对不上 → `sudo certbot certificates` 看实际名字 |
+| **`web` 起不来，报 `port is already allocated`** | 80/443 被占了（多半是宝塔自带的 nginx）→ 见 12.2 那个方框 |
+| 网页打不开，`curl localhost` 却正常 | **云厂商安全组**没放行 80 / 443（不是 UFW） |
+| **浏览器报「连接不安全」/ 证书错误** | ① 证书过期了 → `sudo certbot certificates`；② 域名和证书不匹配；③ 访问的是 IP 不是域名 |
+| **`http://` 打不开、`https://` 正常** | 正常。80 就是用来跳转的 —— 但证书**续期要靠 80**，所以安全组 80 不能关 |
+| **证书 90 天后过期了，没自动续上** | 第 3 步（切 webroot）没做，或没做成功 → `sudo grep authenticator /etc/letsencrypt/renewal/<域名>.conf`，期望 `webroot` |
+| 页面能打开，接口全部失败 | nginx 还指着旧 backend IP → `docker compose restart web` |
 | 生成大文章必然 504 | nginx `proxy_read_timeout` 不是 `600s` |
-| 后台能登录但没样式 | `collectstatic` 没跑成功 → 看 backend 启动日志 |
+| 后台能登录但没样式 | ① 上线 HTTPS 之后：`location /static/` 少了 `X-Forwarded-Proto`（见 12.10 验证清单 ①）；② `collectstatic` 没跑成功 → 看 backend 启动日志 |
+| **`backend` 容器一直 unhealthy，但功能正常** | `SECURE_REDIRECT_EXEMPT` 没生效：健康检查拿到 301，而 `curl -f` 把 3xx 也算成功 |
 | `400 Invalid HTTP_HOST header` | `ALLOWED_HOSTS` 里少了你访问用的那个名字 |
-| 后台登录 403 | `CSRF_TRUSTED_ORIGINS` 少了 `http://` 前缀 |
+| 后台登录 403 | `CSRF_TRUSTED_ORIGINS` 的协议/域名和实际访问方式对不上（上了 HTTPS 必须写 `https://`） |
 | `Access denied for user` | 密码里有 `$` 被 compose 吃掉了 |
 | 能生成但说「未能获取外部资料」 | `SEARCH_API_KEY` 没填 |
 | 配图一张都生不出来，提示「服务暂时不可用」 | `IMAGE_API_KEY` / `IMAGE_BASE_URL` / `IMAGE_MODEL` 有一个是空的（`message` 里会点名是哪个） |
 | 生图返回 404 或「模型不存在」 | `IMAGE_BASE_URL` 少了 `/v1` 结尾，或者 `IMAGE_MODEL` 不是中转站实际提供的名字 |
 | 生图提示 401 / 余额不足 | `IMAGE_API_KEY` 不对，或者**中转站账户余额没了**（和 LLM 的余额是两个账户） |
 | 配图生成很慢后超时 | `IMAGE_TIMEOUT` 太小（默认 300 秒）。生图比生文慢得多，一张 30~90 秒是常态；如果确实要调大，**前端的 `IMAGE_GENERATE_TIMEOUT` 和 nginx 的 `proxy_read_timeout` 也要一起调**，否则只是把超时点往后挪了一层 |
-| **图片生成成功但页面上全是裂图** | ① `uploads` 卷没挂上（`docker compose exec backend ls /app/media`）；② nginx 没重启（`docker compose restart nginx`）；③ 浏览器缓存了旧的 404 —— 强刷一次 |
+| **图片生成成功但页面上全是裂图** | ① `uploads` 卷没挂上（`docker compose exec backend ls /app/media`）；② nginx 没重启（`docker compose restart web`）；③ 浏览器缓存了旧的 404 —— 强刷一次 |
+| **「复制到公众号」的文字过去了、图全是裂的** | ① `MEDIA_PUBLIC_BASE_URL` 写成 `http://` 而网站是 `https://` → 被**混合内容**拦掉（F12 Console 里能看到 Mixed Content 警告）；② 那一项干脆没填 → 后端会跳过所有图并给出中文提示 |
 | 文章详情页按 F5 变 404 | `nginx.conf` 里 `/media/` 那条 `location` 没写，图片请求掉进了 SPA 的 `try_files ... /index.html` 回退 |
 | **推送报 `40164`** | ★ **服务器公网 IP 不在公众号的「IP 白名单」里**。去公众号后台 → 开发 → 基本配置 → IP 白名单 加上。这是微信侧的硬性配置，代码改不了。报错原文会原样显示给你 |
 | 推送报 `48001` / `api unauthorized` | 公众号没有「草稿箱」接口权限。已认证订阅号默认有；**未认证的个人号拿不到**，这就是推不出去的原因 |
