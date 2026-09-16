@@ -21,6 +21,7 @@ from apps.common.exceptions import (
     ImageLimitExceededError,
     ImageProviderError,
     ImageQuotaExceededError,
+    ImageUploadInvalidError,
 )
 from apps.common.markdown_sections import section_titles
 from apps.common.utils import truncate
@@ -88,6 +89,17 @@ def enforce_image_quota(*, user) -> None:
     ★ "今天零点"必须按**上海时区**算。created_at 存的是 UTC（USE_TZ=True），
       直接拿 UTC 零点当分界线的话，额度会在北京时间早上 8 点重置 ——
       这种 bug 平时看不出来，只在有人抱怨"我额度半夜就没了"时才暴露。
+
+    ★★ 统计时**排除用户自己上传的实拍图**（source=UPLOAD）。
+
+      这条额度是防"生图 API 烧钱"的，上传自己的照片不花一分钱。
+      不排除的话，用户传了 8 张实拍图就会看到"你今天已生成 8 张配图，
+      达到每日上限" —— 而他一张都没生成过，完全不知道该做什么
+      （详见 GeneratedImage.Source 的说明）。
+
+      ★ 注意两个计数要**用同一个过滤条件**（下面抽成了 _counted_today），
+        否则单用户额度和全站额度的口径会不一致，
+        而且这种不一致只在两个额度都开着的部署上才显形。
     """
     per_user = settings.IMAGE_DAILY_QUOTA_PER_USER
     global_cap = settings.IMAGE_DAILY_QUOTA_GLOBAL
@@ -96,8 +108,14 @@ def enforce_image_quota(*, user) -> None:
 
     day_start = timezone.localtime().replace(hour=0, minute=0, second=0, microsecond=0)
 
+    def _counted_today(**extra):
+        """今天**算额度**的配图。上传的实拍图不算。"""
+        return GeneratedImage.objects.filter(
+            created_at__gte=day_start, **extra
+        ).exclude(source=GeneratedImage.Source.UPLOAD)
+
     if per_user > 0:
-        used = GeneratedImage.objects.filter(user=user, created_at__gte=day_start).count()
+        used = _counted_today(user=user).count()
         if used >= per_user:
             logger.warning(
                 "用户达到每日配图额度 user_id=%s used=%s limit=%s",
@@ -111,7 +129,7 @@ def enforce_image_quota(*, user) -> None:
             )
 
     if global_cap > 0:
-        total = GeneratedImage.objects.filter(created_at__gte=day_start).count()
+        total = _counted_today().count()
         if total >= global_cap:
             logger.warning("全站每日配图总量已达上限 total=%s limit=%s", total, global_cap)
             raise ImageQuotaExceededError("今天全站的配图额度已经用完，请明天再试。")
@@ -314,6 +332,119 @@ def generate_image(
         record.id,
         record.byte_size,
         duration_ms,
+    )
+    return record
+
+
+# ---------------------------------------------------------------------------
+# 用户自己上传实拍图
+# ---------------------------------------------------------------------------
+def upload_image(
+    *,
+    article: Article,
+    user,
+    data: bytes,
+    caption: str = "",
+    anchor_index: int | None = None,
+) -> GeneratedImage:
+    """把用户自己上传的一张照片存成配图。
+
+    存好之后它和 AI 配图**完全等价**：一样有图注、插入位置、能设封面，
+    推送和「复制到公众号」走的也是同一条路（包括上传到微信换 mmbiz 地址
+    那一步，见 wechat.services._rehost_images_best_effort）。
+
+    ★ 和 generate_image 的三点不同，都是刻意的：
+
+        1. **不查每日额度**。那条额度是防生图 API 烧钱的，上传自己的
+           照片不花钱（详见 GeneratedImage.Source 的说明）。
+           但**单篇上限照样查** —— 那条管的是"正文里图太多很难读"。
+        2. **同步、没有 provider、不会失败在半路**。字节已经在手里了，
+           没有 30~90 秒的等待，也没有"调 API 失败"这种状态。
+        3. **字节来自浏览器，是不可信的**。必须验明是图片、必须去 EXIF，
+           这两件事都收敛在 image_utils.normalize_uploaded_photo 里。
+
+    ★ 不做的一件事：**不压缩到 1MB 以内**。
+      那是上传到微信那一步的要求，由 normalize_for_wechat_body 负责。
+      这里只保证落盘的图不是个 3MB 的巨物（缩到 1600px + quality 88）。
+      分成两步是因为它们的**触发时机不同**：落盘一次，上传微信可能很多次
+      （每张图只在第一次上传时压一次，之后复用 wechat_url）。
+    """
+    # ★ 单篇上限要查，每日额度不查 —— 见 docstring 第 1 点。
+    enforce_article_limit(article=article)
+
+    if anchor_index is None:
+        # 用户没在界面上选位置时的默认值。
+        # ★ 不走 guess_anchor_index()：那个函数是靠**配图建议的文字**猜的
+        #   （"开头/封面/题图"之类关键词），而上传的图根本没有建议文字，
+        #   传进去只会走到它的最后一条兜底（按序号均分），等于白绕一圈。
+        #   实拍图默认放开头最合理 —— 通常是题图或现场图。
+        anchor_index = 0
+
+    normalized = image_utils.normalize_uploaded_photo(data)
+    if normalized is None:
+        # ★ 一句提示要同时覆盖"不是图片"和"太大了"两种情况，
+        #   因为对用户来说这两件事的下一步动作是同一个：换一张再传。
+        #   到底哪种，后端日志里有（normalize_uploaded_photo 会打 WARNING）。
+        raise ImageUploadInvalidError(
+            f"这个文件没能识别成图片。请传 JPG / PNG / WebP 格式的照片，"
+            f"大小不超过 {image_utils.MAX_UPLOAD_BYTES // (1024 * 1024)}MB。"
+        )
+    content, content_type = normalized
+
+    width, height = image_utils.probe(content)
+
+    record = GeneratedImage.objects.create(
+        article=article,
+        user=user,
+        # source 决定它会不会占每日额度（见 GeneratedImage.Source）
+        source=GeneratedImage.Source.UPLOAD,
+        # ★ suggestion_index / suggestion / prompt 全部留默认值。
+        #   它们是"AI 配图建议"这条链路的字段，硬塞会给排查添乱：
+        #   将来看到 prompt 是空的才知道这是上传的，而不是"生成时忘了填"。
+        anchor_index=anchor_index,
+        caption=truncate(caption, 200, ""),
+        # 直接就是成功态：没有中间过程，也就不该有中间态可查
+        status=GeneratedImage.Status.SUCCEEDED,
+        # provider 留空（它不是生图服务生成的）。
+        # 要判断"是不是上传的"请认 source，不要认这个字段。
+        content_type=content_type,
+        byte_size=len(content),
+        width=width,
+        height=height,
+        # 同一位置的排序接着已有的往后排，不然会和 AI 图撞 sort_order
+        sort_order=article.images.count(),
+    )
+
+    # ★ 写文件的方式和 generate_image 里那处**必须完全一致**：
+    #   save=False 阻止 FieldFile.save() 内部再触发一次 record.save()；
+    #   而 update_fields 里**必须**有 "image_file"，否则文件名不落库 ——
+    #   表现是图片明明在磁盘上、列表里却全是"图片没了"。
+    #
+    # ★ 传给 save() 的名字里**刻意不含用户上传的原始文件名**：
+    #   image_upload_to 只取它的扩展名，真正的路径是它自己生成的
+    #   uuid4（那是 /media/ 这条链路上唯一的访问控制）。
+    #   让用户的文件名参与进来没有任何好处，只有路径注入的风险面。
+    record.image_file.save(
+        f"{record.id}{image_utils.extension_for(content_type)}",
+        ContentFile(content),
+        save=False,
+    )
+    record.save(
+        update_fields=[
+            "image_file",
+            "content_type",
+            "byte_size",
+            "width",
+            "height",
+            "updated_at",
+        ]
+    )
+
+    logger.info(
+        "实拍图已上传 article_id=%s image_id=%s bytes=%s",
+        article.id,
+        record.id,
+        record.byte_size,
     )
     return record
 

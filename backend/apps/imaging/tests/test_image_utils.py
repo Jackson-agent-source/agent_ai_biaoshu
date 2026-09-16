@@ -19,14 +19,18 @@ from __future__ import annotations
 import io
 import os
 
+import pytest
 from PIL import Image
 
 from apps.imaging.image_utils import (
+    MAX_UPLOAD_BYTES,
+    MAX_UPLOAD_EDGE,
     WECHAT_BODY_MAX_BYTES,
     WECHAT_THUMB_MAX_BYTES,
     extension_for,
     make_wechat_thumb,
     normalize_for_wechat_body,
+    normalize_uploaded_photo,
     probe,
     sniff_content_type,
 )
@@ -199,3 +203,128 @@ class TestExtensionFor:
 
     def test_case_insensitive(self):
         assert extension_for("IMAGE/PNG") == ".png"
+
+
+# ---------------------------------------------------------------------------
+# 用户上传的照片
+# ---------------------------------------------------------------------------
+def photo_with_gps_exif(width: int = 800, height: int = 600) -> bytes:
+    """造一张**带 GPS 坐标**的 JPEG，冒充手机拍的照片。
+
+    ★ 为什么测试里非要真的写 GPS 进去，而不是随便塞个标签：
+      要验的正是"照片里的定位信息不会跟着发到公众号上"。
+      塞一个无关的标签只能证明"某些 EXIF 没了"，证明不了那一件事。
+      （写 GPS 需要 IFDRational，直接写元组会在 tobytes() 时
+        TypeError: bad operand type for abs(): 'tuple'。）
+    """
+    from PIL.TiffImagePlugin import IFDRational
+
+    exif = Image.Exif()
+    exif[0x010F] = "TestPhone"  # Make
+    exif[0x0110] = "TestModel"  # Model
+    exif[0x8825] = {  # GPSInfo
+        1: "N",
+        2: (IFDRational(39, 1), IFDRational(54, 1), IFDRational(0, 1)),
+        3: "E",
+        4: (IFDRational(116, 1), IFDRational(23, 1), IFDRational(0, 1)),
+    }
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (width, height), (180, 140, 90)).save(
+        buffer, format="JPEG", exif=exif.tobytes()
+    )
+    return buffer.getvalue()
+
+
+class TestNormalizeUploadedPhoto:
+    """★ 用户上传的字节是**不可信**的，这个函数是唯一的验证点。
+
+    两条底线，各自一条测试：
+        1. 不是图片的字节必须被拒绝（返回 None），不能落盘
+        2. 定位信息必须被清掉 —— 这些图最终要发到公众号上公开
+    """
+
+    def test_rejects_non_image_bytes(self):
+        """一个改了扩展名的 PHP 文件不能落盘。
+
+        ★ 这条是**安全**断言，不是格式检查：/media/ 和网站同源，
+          让非图片字节落进去就是给自己开后门。
+          而且必须真的解码过（PIL 的 load()）才算验过 ——
+          只看文件头的话，一个 JPEG 头 + 后面挂 PHP 的文件能骗过去。
+        """
+        assert normalize_uploaded_photo(b"<?php system($_GET['c']); ?>") is None
+        assert normalize_uploaded_photo(b"not an image at all") is None
+        # 只有文件头对、后面是垃圾的也要拒
+        assert normalize_uploaded_photo(b"\xff\xd8\xff" + b"\x00" * 100) is None
+
+    def test_rejects_empty(self):
+        assert normalize_uploaded_photo(b"") is None
+
+    def test_rejects_oversized_before_decoding(self):
+        """超过上限直接拒，不去解码它（省掉一次可能很贵的解码）。"""
+        assert normalize_uploaded_photo(b"x" * (MAX_UPLOAD_BYTES + 1)) is None
+
+    def test_strips_gps_and_all_exif(self):
+        """★★ 上传后必须一点 EXIF 都不剩。
+
+        这是本次改动里**唯一一条用户自己永远发现不了的**风险：
+        手机照片带 GPS 坐标，而他不会知道自己的位置被一起发出去了。
+        Pillow 重编码时不写 EXIF，所以这一步天然做到 ——
+        这条测试就是钉住"别为了保留拍摄信息去加 exif=..."。
+        """
+        source = photo_with_gps_exif()
+        # 先确认造的样本真的是带 GPS 的，否则这条测试是假绿
+        assert 0x8825 in open_image(source).getexif()
+
+        result = normalize_uploaded_photo(source)
+
+        assert result is not None
+        content, content_type = result
+        assert content_type == "image/jpeg"
+        assert open_image(content).getexif() == {}
+
+    def test_downscales_long_edge(self):
+        """4000px 的手机照片要缩到 MAX_UPLOAD_EDGE，否则白占磁盘和流量。"""
+        source = photo_with_gps_exif(width=4000, height=3000)
+
+        result = normalize_uploaded_photo(source)
+
+        assert result is not None
+        image = open_image(result[0])
+        assert max(image.width, image.height) == MAX_UPLOAD_EDGE
+        # 等比：宽高比不能变（变形比模糊更难看）
+        assert image.width / image.height == pytest.approx(4000 / 3000, rel=0.01)
+
+    def test_small_photo_is_not_enlarged(self):
+        """比上限小的图**不要**放大 —— 放大只会糊，不会更清楚。"""
+        source = photo_with_gps_exif(width=800, height=600)
+
+        result = normalize_uploaded_photo(source)
+
+        assert result is not None
+        image = open_image(result[0])
+        assert (image.width, image.height) == (800, 600)
+
+    def test_always_outputs_jpeg(self):
+        """PNG 上传也统一转成 JPEG（实拍图没有透明通道，PNG 只会更大）。"""
+        png = make_image_bytes(fmt="PNG", width=300, height=200)
+
+        result = normalize_uploaded_photo(png)
+
+        assert result is not None
+        content, content_type = result
+        assert content_type == "image/jpeg"
+        assert content[:3] == b"\xff\xd8\xff"
+
+    def test_output_stays_under_wechat_body_limit(self):
+        """落盘的图不该是个巨物 —— 噪声照片也要能压到 1MB 以内。
+
+        噪声是**最坏情况**（不可压缩）。真实照片比它好压得多，
+        所以这条过了，实拍图就都不会在上传微信那一步被 40009 拒。
+        """
+        source = noisy_png(width=2000, height=1500)
+
+        result = normalize_uploaded_photo(source)
+
+        assert result is not None
+        assert len(result[0]) <= WECHAT_BODY_MAX_BYTES

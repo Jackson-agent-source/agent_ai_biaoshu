@@ -29,12 +29,15 @@ class GeneratedImageSerializer(serializers.ModelSerializer):
     # 也**不要**改写成 request.build_absolute_uri()（那会把 Host 写死进响应）。
     file_url = serializers.SerializerMethodField()
     status_display = serializers.CharField(source="get_status_display", read_only=True)
+    source_display = serializers.CharField(source="get_source_display", read_only=True)
 
     class Meta:
         model = GeneratedImage
         fields = [
             "id",
             "article",
+            "source",
+            "source_display",
             "suggestion_index",
             "suggestion",
             "prompt",
@@ -87,6 +90,26 @@ class ImageGenerateSerializer(serializers.Serializer):
     )
     # ★ 前端必须传它 —— 用户在界面上选了位置就得按用户的来。
     #   留 None 表示"没给"，由服务层用关键词启发式猜一个。
+    anchor_index = serializers.IntegerField(
+        required=False, allow_null=True, default=None, min_value=0, max_value=50
+    )
+    caption = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=200
+    )
+
+
+class ImageUploadSerializer(serializers.Serializer):
+    """POST /api/v1/articles/<id>/images/upload 的**非文件**字段。
+
+    ★ 图片本体不在这里 —— 它是 multipart 里的 `file` 部分，
+      由 View 从 request.FILES 取。这个序列化器只管旁边那两个表单字段，
+      这样"图注太长"之类的校验仍然是 DRF 统一的 400 中文提示，
+      不用在 View 里手写一套。
+
+    ★ 字段名和 ImageGenerateSerializer / ImageUpdateSerializer 保持一致
+      （anchor_index / caption），前端三个接口可以复用同一套表单逻辑。
+    """
+
     anchor_index = serializers.IntegerField(
         required=False, allow_null=True, default=None, min_value=0, max_value=50
     )

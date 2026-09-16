@@ -2,15 +2,20 @@
 配图 API。
 
 路由：
-    GET    /api/v1/articles/<article_id>/images   列出配图（只有元数据）
-    POST   /api/v1/articles/<article_id>/images   生成一张（同步，30~90 秒）
-    PATCH  /api/v1/images/<image_id>              改图注/位置/顺序/封面
-    DELETE /api/v1/images/<image_id>              删除
-    GET    /api/v1/images/<image_id>/file         取图片二进制（兜底，见下）
+    GET    /api/v1/articles/<article_id>/images          列出配图（只有元数据）
+    POST   /api/v1/articles/<article_id>/images          生成一张（同步，30~90 秒）
+    POST   /api/v1/articles/<article_id>/images/upload   上传一张实拍图（multipart）
+    PATCH  /api/v1/images/<image_id>                     改图注/位置/顺序/封面
+    DELETE /api/v1/images/<image_id>                     删除
+    GET    /api/v1/images/<image_id>/file                取图片二进制（兜底，见下）
 
 ★ 图片本体的**正常**获取路径是 /media/...（nginx 从共享卷直发）。
   上面最后那条 /file 路由是**兜底**，不是主路径 —— 具体原因写在
   ImageFileView 的 docstring 里。
+
+★ "生成"和"上传"是**两条独立的路由**，不是一个 POST 的两种行为。
+  理由写在 ArticleImageUploadView 的 docstring 里（错误码、超时、
+  前端调用方式全都不同，合在一起会让日志里的失败无从分辨）。
 
 所有写操作都强制带 user=request.user 或校验文章归属，
 别人的文章一律 404（而不是 403）—— 连"这个 id 存不存在"都不泄露。
@@ -23,25 +28,30 @@ import logging
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import get_object_or_404
 from rest_framework.exceptions import ValidationError
+from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.articles.models import Article
+from apps.common.exceptions import ImageUploadInvalidError
 from apps.common.markdown_sections import section_count
 from apps.common.responses import success_response
+from apps.imaging import image_utils
 from apps.imaging.models import GeneratedImage
 from apps.imaging.serializers import (
     GeneratedImageSerializer,
     ImageGenerateSerializer,
     ImageUpdateSerializer,
+    ImageUploadSerializer,
 )
 from apps.imaging.services import (
     delete_image,
     generate_image,
     get_article_images,
     update_image,
+    upload_image,
 )
 
 logger = logging.getLogger(__name__)
@@ -120,6 +130,75 @@ class ArticleImagesView(APIView):
         )
         return success_response(
             GeneratedImageSerializer(image).data, message="配图已生成。", status_code=201
+        )
+
+
+class ArticleImageUploadView(APIView):
+    """POST /api/v1/articles/<article_id>/images/upload —— 上传一张实拍图。
+
+    ★ 为什么单独开一条路由，而不是让 ArticleImagesView.post 同时收
+      JSON（生成）和 multipart（上传）：
+
+        那个 POST 现在是"生成一张 AI 配图"，语义是"调生图服务"，
+        有 30~90 秒的耗时、有额度检查、有 IMAGE_TIMEOUT。
+        塞进上传之后，同一个 URL 的两种行为在**错误码、超时、前端调用方式**
+        上全都不一样（40009/IMAGE_PROVIDER_ERROR vs IMAGE_UPLOAD_INVALID），
+        排查时看到 "POST /articles/x/images 失败" 根本不知道是哪件事。
+        两个动作，两条路由。
+
+    ★ 图片本体走 multipart 的 `file` 部分。
+      不用 base64 塞进 JSON：base64 会把体积撑大 33%，
+      而且 JSON 得整个进内存（multipart 会溢写到临时文件）。
+    """
+
+    permission_classes = [IsAuthenticated]
+    # ★ 只接受 multipart。默认的 JSONParser 会让一个 Content-Type 写错的
+    #   请求变成"file 字段缺失"，而真正的原因是发错了格式 —— 少一种歧义。
+    parser_classes = [MultiPartParser]
+
+    def post(self, request: Request, article_id) -> Response:
+        article = _get_article(request, article_id)
+
+        upload = request.FILES.get("file")
+        if upload is None:
+            raise ValidationError(
+                "没有收到图片文件。请在表单的 file 字段里放一张照片。"
+            )
+
+        # ★ 先看 size 再 read()。
+        #   UploadedFile.size 是流的长度，不用把内容读进内存就能拿到；
+        #   不先判一下的话，一个 200MB 的请求会先被整个读成 bytes 再被拒绝。
+        if upload.size == 0:
+            raise ValidationError("上传的文件是空的。")
+        if upload.size > image_utils.MAX_UPLOAD_BYTES:
+            raise ImageUploadInvalidError(
+                f"图片太大了（{upload.size // (1024 * 1024)}MB），"
+                f"最大支持 {image_utils.MAX_UPLOAD_BYTES // (1024 * 1024)}MB。"
+                f"可以先在手机或电脑上把照片压小一点再传。"
+            )
+
+        serializer = ImageUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        # 插入位置不能超出这篇文章实际的小节数 —— 和生成那条路同一个规则。
+        # 超范围的 anchor_index 会让图在渲染时无处可插（静默丢失），
+        # 不如在这里直接说清楚。
+        total = section_count(article.content_markdown or "")
+        if data["anchor_index"] is not None and data["anchor_index"] > total:
+            raise ValidationError(
+                f"这篇文章只有 {total} 个小节，插入位置 {data['anchor_index']} 超出范围。"
+            )
+
+        image = upload_image(
+            article=article,
+            user=request.user,
+            data=upload.read(),
+            caption=data["caption"],
+            anchor_index=data["anchor_index"],
+        )
+        return success_response(
+            GeneratedImageSerializer(image).data, message="实拍图已上传。", status_code=201
         )
 
 

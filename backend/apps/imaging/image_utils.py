@@ -1,7 +1,9 @@
 """
 图片处理（Pillow）。
 
-这个模块存在的唯一原因：**微信对图片的大小限制非常硬**。
+这个模块主要处理两件事：
+
+**一、微信对图片的大小限制非常硬**（原本它是本模块存在的唯一原因）
 
     · 正文图（media/uploadimg）：只收 jpg/png，且**必须小于 1MB**，超了报 40009
     · 封面（material/add_material?type=thumb）：只收 **JPG**，且约 **64KB**
@@ -9,6 +11,11 @@
 生图模型吐出来的图经常是 1.5~3MB 的 PNG，**直接上传必然失败**。
 所以压缩不是一个"顺手优化"，而是推送到公众号这条链路上的**必经环节** ——
 少了它，功能就是坏的。
+
+**二、用户自己上传的照片不能直接信**（normalize_uploaded_photo）
+
+    字节来自浏览器，必须先解码验明是图片、必须去掉 EXIF（里面有 GPS），
+    再顺手缩到 1600px。详见那个函数的说明。
 
 本模块所有函数**不抛异常**：图片坏掉时返回原数据或 None，
 由上层把"这张图有问题"变成一句中文提示，而不是一个 500。
@@ -37,6 +44,23 @@ WECHAT_THUMB_MAX_BYTES = 64 * 1024
 # 逐级降质量的档位。先掉画质、后掉尺寸：
 # 对插画类图片来说，轻微掉画质比缩小分辨率更不容易被看出来。
 _QUALITY_STEPS = (85, 78, 70, 62, 55, 48, 40)
+
+# ---- 用户上传的实拍图 ----
+# 接收上限（**进入 Django 之前**的那道闸是 nginx 的 client_max_body_size）。
+# ★ 前端会先用 canvas 把照片压到 1600px 再传，正常不超过 1MB。
+#   这个上限是给"前端压缩没生效"（老浏览器、canvas 被禁用）兜底的。
+#   两道闸门都要有，各挡各的：nginx 那道挡的是"别把 10MB 灌进我的进程"，
+#   这道挡的是"别把 10MB 写进磁盘"。
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+# 落盘前统一把长边缩到这个像素数。
+# ★ 公众号正文图的显示宽度约 677px（视网膜屏按 2x 算就是 1354），
+#   1600 足够清晰；再大只是白占磁盘、白耗用户流量。
+MAX_UPLOAD_EDGE = 1600
+
+# 实拍图的 JPEG 质量。比正文图那套档位(最高 85)高一点：
+# 照片的细节比插画多，压过头一眼能看出来（天空会出现色带）。
+_UPLOAD_JPEG_QUALITY = 88
 
 
 def _open(data: bytes) -> Image.Image | None:
@@ -150,6 +174,79 @@ def normalize_for_wechat_body(data: bytes) -> tuple[bytes, str]:
     # 让上传去撞微信的报错，日志里能看到真实原因。
     logger.error("正文图压缩后仍然超过 %s 字节", WECHAT_BODY_MAX_BYTES)
     return _encode_jpeg(rgb, 40), "image/jpeg"
+
+
+def normalize_uploaded_photo(data: bytes) -> tuple[bytes, str] | None:
+    """把用户上传的照片整成一张可以落盘的 JPEG。整不了返回 None。
+
+    ★★ 为什么用户上传的图**必须**整个重编码一遍，
+        而不能像生图那样"够小就原样存"（normalize_for_wechat_body 的做法）：
+
+      1. **必须验明它真的是图片。** 生图那条路的字节来自我们自己的
+         provider，可以信；这里来自浏览器，一个改了扩展名的 .php
+         也能传上来。_open() 会真的解码（还调了 load()），
+         解不开就是 None —— 这是整条链路上**唯一**的验证点。
+         扩展名和浏览器报的 Content-Type 都不可信，一个都不看。
+
+      2. **必须去掉 EXIF。** 手机拍的照片里带 GPS 坐标，
+         而这些图**最终是要发到公众号上公开的**。不重编码就等于
+         把拍照的人当时站在哪儿一起发出去了 —— 而且这种泄漏
+         用户完全不会察觉，也不会有人来报 bug。
+         Pillow 重编码时默认不写 EXIF，所以这一步顺带就做到了。
+         ★ 别为了"保留拍摄信息"去加 exif=... —— 那正是要扔掉的东西。
+
+      3. 手机照片动辄 4000px 宽、5MB 以上，而微信正文图硬性要求
+         小于 1MB。反正要压，不如压在这一步：磁盘和带宽都省一遍。
+
+    ★ 永远输出 JPEG：实拍图没有透明通道，PNG 只会更大。
+      统一成 jpg 也少一条分支（微信对 jpg/png 都收，本来也不用分）。
+    """
+    if not data:
+        return None
+
+    if len(data) > MAX_UPLOAD_BYTES:
+        # ★ 这里不抛异常，和本模块其他函数一个态度：
+        #   由上层把 None 变成一句中文提示。
+        logger.warning("上传的图片超过上限 %s 字节，实际 %s", MAX_UPLOAD_BYTES, len(data))
+        return None
+
+    image = _open(data)
+    if image is None:
+        # 到这一步说明字节根本不是能解码的图片（或者是个解压炸弹）
+        logger.warning("上传的文件不是能识别的图片，%s 字节", len(data))
+        return None
+
+    rgb = _to_rgb(image)
+
+    # 先缩尺寸再压质量 —— 和 normalize_for_wechat_body 同一个顺序，
+    # 但对实拍图来说"缩尺寸"这一步几乎总会触发：1600px 的实拍图
+    # 在 quality=88 时通常只有 300~600KB，够发公众号了，
+    # 没必要为了再省几十 KB 去牺牲画质。
+    longest = max(rgb.width, rgb.height)
+    if longest > MAX_UPLOAD_EDGE:
+        scale = MAX_UPLOAD_EDGE / longest
+        rgb = rgb.resize(
+            (max(1, int(rgb.width * scale)), max(1, int(rgb.height * scale))),
+            Image.LANCZOS,
+        )
+
+    buffer = _encode_jpeg(rgb, _UPLOAD_JPEG_QUALITY)
+
+    # 噪声极多的照片（星野、树叶、水面）偶尔会超过 1MB。
+    # ★ 这里只降一档质量，**不重复实现一遍完整的压缩循环** ——
+    #   normalize_for_wechat_body 在上传微信那一步还会再压一次，
+    #   那才是硬要求所在的地方。这里只要保证"落盘的图不是个 3MB 的巨物"。
+    if len(buffer) > WECHAT_BODY_MAX_BYTES:
+        buffer = _encode_jpeg(rgb, 70)
+
+    logger.info(
+        "实拍图已处理 %s -> %s 字节 (%sx%s)",
+        len(data),
+        len(buffer),
+        rgb.width,
+        rgb.height,
+    )
+    return buffer, "image/jpeg"
 
 
 def make_wechat_thumb(

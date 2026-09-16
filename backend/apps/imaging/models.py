@@ -91,6 +91,25 @@ class GeneratedImage(models.Model):
         SUCCEEDED = "succeeded", "已生成"
         FAILED = "failed", "失败"
 
+    class Source(models.TextChoices):
+        """这张图是怎么来的。
+
+        ★ 为什么必须区分，而不是"反正都是配图"：
+
+          enforce_image_quota() 数的是**今天调了几次生图 API** ——
+          它的全部目的是防烧钱。用户自己上传实拍图一分钱不花，
+          如果也跟着占额度，他会看到"你今天已生成 8 张，达到上限"，
+          而他一张都没生成过。这种提示会让他完全不知道该做什么。
+
+          所以每日额度统计**排除上传**；
+          而单篇上限（enforce_article_limit）不排除 ——
+          那条管的是"正文里图太多会很难读"，和花不花钱无关，
+          上传的实拍图当然也算正文图。
+        """
+
+        AI = "ai", "AI 生成"
+        UPLOAD = "upload", "自己上传"
+
     # 用 UUID 而不是自增 id：
     #   1. 取图接口 /api/v1/images/<id>/file 是 AllowAny（浏览器的 <img>
     #      带不了 Authorization 头），UUID4 不可猜，等于一条隐式的访问凭据。
@@ -117,6 +136,9 @@ class GeneratedImage(models.Model):
     )
 
     # ---- 来源：来自文章的第几条配图建议 ----
+    # ★ 只有 AI 生成的图才有意义（上传的图没有"配图建议"这回事，
+    #   它固定是 0）。刻意不给它加 db_index —— 按它查询的场景不存在，
+    #   索引只会拖慢写入。
     suggestion_index = models.PositiveIntegerField("建议序号", default=0)
     suggestion = models.TextField("配图建议原文", blank=True, default="")
     # 实际发给生图模型的提示词（= IMAGE_STYLE_PROMPT + 建议），排查"图不对"时看它
@@ -168,6 +190,12 @@ class GeneratedImage(models.Model):
     is_cover = models.BooleanField("作为封面", default=False)
 
     # ---- 排查用的元信息 ----
+    source = models.CharField(
+        "来源",
+        max_length=20,
+        choices=Source.choices,
+        default=Source.AI,
+    )
     provider = models.CharField("生图服务", max_length=50, blank=True, default="")
     model_name = models.CharField("模型名", max_length=100, blank=True, default="")
     duration_ms = models.IntegerField("耗时(毫秒)", null=True, blank=True)
