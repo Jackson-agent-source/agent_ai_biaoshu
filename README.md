@@ -994,39 +994,59 @@ cd ../frontend && npm run build         # 前端类型检查 + 打包
 > ★ 服务器在**境外**的话不需要 ICP 备案，80/443 直接用；**境内**服务器必须备案
 > 之后 80/443 才通，没备案就只能先用 8080 这样的高位端口。
 >
-> ★ 确实没有域名、只能纯 HTTP 跑（临时测试）？把 `.env` 的 `WEB_PORT` 改回
-> `8080`、`USE_HTTPS` 设成 `False`，并把 `frontend/nginx.conf` 里的 443 块
-> 和 80 块的跳转注释掉。12.4 里有说明。
+> ★ 本文档的部署拓扑是**两层**：前面的宝塔 nginx 终结 TLS、持有证书，
+> 我们的容器只在 `127.0.0.1:8080` 上讲明文 HTTP，由宝塔反代进来。
+> 12.10 有完整说明。**容器本身不碰证书，也不需要证书文件才能启动** ——
+> 这是走宝塔这条路带来的一个实际好处：`docker compose up` 不会再因为
+> 证书没签好而卡在 `Restarting`。
+>
+> ★ 确实没有域名、只能纯 HTTP 跑（临时测试）？把 `.env` 的 `USE_HTTPS`
+> 设成 `False`、`ALLOWED_HOSTS` 加上 `<公网IP>`，浏览器直接开
+> `http://<公网IP>:8080` 即可（`WEB_BIND` 这时要临时改成 `0.0.0.0`，
+> 用完记得改回来 —— 理由见 12.10「一个容易埋雷的地方」）。12.4 里有说明。
 
 ### 12.1 部署后长什么样
 
 ```
-                        ┌─────────────────────────────────────────┐
-   浏览器 ── 80 ──▶     │  web 容器（nginx）                        │
-   http://<域名>        │   80 块：只看三件事                        │
-     │                  │     ├─ /healthz           → 200（容器探活）│
-     │  301 跳转         │     ├─ /.well-known/...   → 证书续期验证   │
-     ▼                  │     └─ 其余              → 301 跳 HTTPS    │
-   https://<域名> ─443─▶│   443 块：真正的站点                       │
-                        │     ├─ /                  → 前端静态文件   │
-                        │     ├─ /api/ /admin/ /health/              │
-                        │     │        → 反代 http://backend:8000    │
-                        │     ├─ /static/           → 反代 backend   │
-                        │     └─ /media/            → 命名卷 uploads │
-                        └─────────────────────────────────────────┘
-                                     │ 容器内网，不映射到宿主机
-                        ┌────────────▼────────────────────────────┐
-                        │  backend 容器（gunicorn 3 worker × 4 线程）│
-                        └────────────┬────────────────────────────┘
-                        ┌────────────▼────────────────────────────┐
-                        │  db 容器（mysql:8.0）                     │
-                        └─────────────────────────────────────────┘
+   浏览器
+     │
+     │  https://<域名>   ← 证书在这一层
+     ▼
+┌──────────────────────────────────────────────────────────┐
+│  宝塔 nginx（宿主机，独占 80 / 443）                        │
+│    ├─ 你的域名          → 反代 http://127.0.0.1:8080      │
+│    └─ 同一台机器上别的站  → 原样不动（见 12.10 开头）        │
+└──────────────────────────┬───────────────────────────────┘
+                           │ 明文 HTTP，只走回环地址
+                           │ ★ 绑 127.0.0.1，公网碰不到，见 12.10「埋雷」
+┌──────────────────────────▼───────────────────────────────┐
+│  web 容器（nginx，只监听 80、只讲明文）                      │
+│    ├─ /healthz             → 200（容器探活）               │
+│    ├─ /                    → 前端静态文件（Vue 打包产物）    │
+│    ├─ /api/ /admin/ /health/                              │
+│    │        → 反代 http://backend:8000                    │
+│    ├─ /static/             → 反代 backend                 │
+│    └─ /media/              → 命名卷 uploads（只读直发）      │
+└──────────────────────────┬───────────────────────────────┘
+                           │ 容器内网，不映射到宿主机
+┌──────────────────────────▼───────────────────────────────┐
+│  backend 容器（gunicorn 3 worker × 4 线程）                 │
+└──────────────────────────┬───────────────────────────────┘
+┌──────────────────────────▼───────────────────────────────┐
+│  db 容器（mysql:8.0）                                      │
+└──────────────────────────────────────────────────────────┘
 
-   宿主机上的 certbot：签发/续期证书 → /etc/letsencrypt（只读挂进 web 容器）
+   ★ TLS 不在这套 compose 里 —— 由宿主机上的宝塔终结，
+     连同证书的签发和自动续期一起归它管。见 12.10。
    命名卷：mysql_data（全部文章和账号）  uploads（全部配图）
    ★ 两个卷都不能丢，`docker compose down -v` 会同时删掉它们，见 12.9
-   ★ 证书**不用**备份（丢了能重签），见 12.10 末尾
 ```
+
+**为什么 TLS 交给宝塔，而不是让 `web` 容器自己扛？**
+
+因为**那台机器上还有别的网站在宝塔上**。两个 nginx 抢同一个 80/443，
+要么容器起不来（`port is already allocated`），要么那个站被搞挂。
+完整背景见 12.10 开头 —— 那一条不是"偏好"，是实测出来的约束。
 
 **图片为什么要单独走一条路？**
 配图是几百 KB 的二进制。如果让 Django 来发，**每张图都要占住一个 gunicorn
@@ -1085,26 +1105,63 @@ sudo ufw allow 22/tcp && sudo ufw allow 80/tcp && sudo ufw allow 443/tcp && sudo
 > 而且宝塔会弹警告。放行端口请去 **宝塔 → 安全 → 添加端口规则**，
 > 加 80 和 443。已经手贱开了 UFW 的话：`sudo ufw disable`。
 >
-> **② 宝塔自带的 nginx 必须停掉，而且要禁止自启。**
-> 它占着 80，我们的 `web` 容器也要用 80，两个进程抢一个端口的结果是
-> 容器根本起不来：`Bind for 0.0.0.0:80 failed: port is already allocated`。
+> **② 先查清楚这台机器上还有没有别的网站在跑 —— 有的话，12.10 的每一步
+> 都要顺带确认没影响到它。**
 >
 > ```bash
-> sudo systemctl stop nginx
-> sudo systemctl disable nginx     # ★ 只 stop 不够：机器一重启它又抢回去
+> ls -l /www/server/panel/vhost/nginx/
+> grep -rhE '^[[:space:]]*(server_name|listen)' /www/server/panel/vhost/nginx/ 2>/dev/null \
+>   | sed 's/^[[:space:]]*//' | sort -u
 > ```
 >
-> 想反悔：`sudo systemctl enable --now nginx`。
+> | 看到什么 | 说明 |
+> | --- | --- |
+> | 只有 `0.default.conf` 之类的默认配置，没有别的域名 | 这台机器目前只有宝塔自己，动起来顾虑少 |
+> | 有别的域名（`xxx.online.conf` 之类） | **这台机器上还有别的站在跑。** 部署时实测遇到的就是这种（`supermanapi.online`），别去停宝塔，也别改它的全局配置 |
 >
-> **⚠️ 这会连带停掉宝塔面板和它上面可能有的其他站点。**
-> 这台机器上还有别的网站的话，别停 —— 改成让宝塔做反向代理：
-> **宝塔 → 网站 → 添加站点 → 反向代理**，目标填 `http://127.0.0.1:8080`，
-> 同时把 `.env` 里的 `WEB_BIND` 改成 `127.0.0.1`，然后按 12.10 用宝塔那边
-> 签证书、让宝塔监听 443，我们的 `web` 容器只监听 8080、不开 443。
-> （那条路本文不展开，两套 nginx 会让排查变复杂，能不用就不用。）
+> ★★ **无论哪种情况，容器都不去碰 80/443：宝塔继续管，容器退到 8080 由它反代。**
 >
-> > 早期版本这里写的是「用 8080 + 宝塔一键 SSL」，那是在**没有域名**的
-> > 前提下写的。现在有域名了，让一个 nginx 独占 80/443 更简单，见 12.10。
+> 这一节最早写的是「机器上只有你一个站就把宝塔的 nginx 停掉，让容器独占
+> 80/443」—— 那个做法**现在不成立了**：`frontend/nginx.conf` 已经改成
+> 纯 HTTP 单 server 块，TLS 和 80/443 一律归宝塔。容器就算独占 80，
+> 也没人给浏览器讲 HTTPS，站点照样打不开。
+>
+> 换句话说，「要不要停宝塔的 nginx」这个问题**已经不存在了**：
+> 容器永远只监听 `127.0.0.1:8080`，和宝塔井水不犯河水。
+> 唯一要做的是在宝塔里加一个站点反代过来（12.10）。
+
+---
+
+> **具体怎么做：在宝塔里新加一个站点，反代到 `http://127.0.0.1:8080`**
+>
+> 什么都不用停。宝塔继续独占 80/443、继续管它自己的站点和证书；
+> 我们只是多挂一个站点上去，指到 `web` 容器。两个站互不影响。
+>
+> 完整步骤见 **12.10**。那里有两个必须手工配、漏了整站打不开的东西
+> （`X-Forwarded-Proto` 和 `proxy_read_timeout`），照着 12.10 第 2 步做。
+>
+> > ★ 这一节绕了一圈：最早写的是「8080 + 宝塔一键 SSL」，后来改成
+> > 「容器独占 80/443 + certbot」，最后又改回宝塔反代 ——
+> > 因为部署时才发现**那台机器上还有别的网站在宝塔上**。
+> > 前提变了，结论就得跟着变；这不是前后矛盾，是实测出来的约束。
+>
+> ★ **顺带记一个坑：宝塔的 nginx 不是 systemd 拉起来的。**
+>
+> ```bash
+> sudo systemctl status nginx | head -3
+> #   Active: inactive (dead)          ← 说"没在跑"
+> sudo ss -lntp | grep -E ':(80|443)\s'
+> #   LISTEN ... users:(("nginx",pid=60661,...))   ← 可它明明占着 80
+> ```
+>
+> 两句话说的是两回事：systemd 只认它自己启动过的进程，而宝塔是**自己直接
+> exec 起 nginx** 的（master 的父进程是 1，不经过 systemd）。
+> 所以 **`sudo systemctl stop nginx` 在这台机器上是空操作** ——
+> 不报错、什么也不做，你以为停掉了其实没有。真要停（**按上面的结论，
+> 你不需要停**）得用 `/etc/init.d/nginx stop`。
+>
+> 记这条是因为：网上和旧版本文档里「停掉 nginx 腾出 80」的建议到处都是，
+> 照着做会得到一个"明明停了却还是端口冲突"的诡异现象。
 
 ---
 
@@ -1183,21 +1240,19 @@ nano .env                         # 按下面的说明逐项改
 | 变量 | 怎么填 | 填错的症状 |
 | --- | --- | --- |
 | `DJANGO_SECRET_KEY` | `openssl rand -base64 48` | 容器启动时被 entrypoint 直接拒绝 |
-| `PUBLIC_HOST` | 你的域名，**不带 `https://`、不带结尾斜杠** | nginx 起不来，报找不到证书文件 |
 | `ALLOWED_HOSTS` | `<你的域名>,127.0.0.1,localhost` | Django 返回 `400 Invalid HTTP_HOST header`，**而且不告诉你它期望什么** |
-| `CSRF_TRUSTED_ORIGINS` | `https://<你的域名>` | 后台登录时 403 |
+| `CSRF_TRUSTED_ORIGINS` | `https://<你的域名>` | 后台登录时 403（★ 必须带 `https://` 前缀，只写域名不生效且不报错） |
 | `SITE_ORIGIN` | `https://<你的域名>` | 只影响根路径那句提示语 |
 | `MEDIA_PUBLIC_BASE_URL` | `https://<你的域名>` | 「复制到公众号」粘出去图全是裂的 |
 | `USE_HTTPS` | `True` | Cookie 不加密、不跳转、不发 HSTS —— 等于 HTTPS 白配了 |
+| `WEB_PORT` / `WEB_BIND` | `8080` / `127.0.0.1` | ① 填 80 会撞上宝塔的 nginx；② 填 `0.0.0.0` 是**安全漏洞**，见 12.10「埋雷」 |
 | `DB_PASSWORD` / `DB_ROOT_PASSWORD` | `openssl rand -base64 32 \| tr -d '/+='` | 数据库连不上 |
 | `LLM_API_KEY` | 你的 DeepSeek Key | 生成时报「调用大模型失败」 |
 
-> ★ **`PUBLIC_HOST` 必须和证书签给的那个名字完全一致**（certbot 的 `-d` 参数），
-> 因为 nginx 是按 `/etc/letsencrypt/live/<PUBLIC_HOST>/` 去找证书的。
-> 填错就是 nginx 起不来，报错里会出现你填的这个名字 —— 这时先回来对一下这里。
->
-> ★ 证书要先签好再 `up`，顺序见 12.10 —— **这是本节的第 0 步**，
-> `git pull` 和 `docker compose up -d --build` 都得排在它后面。
+> ★ `WEB_PORT` 和宝塔那边反向代理的目标必须**对得上** ——
+> 宝塔填 `http://127.0.0.1:8080`，这里就得是 `8080`。
+> 改了一边忘了另一边，症状是 502 Bad Gateway。
+
 
 **要用搜索和推送公众号，再补这些**（不填不影响生成文章，只影响对应功能）：
 
@@ -1320,10 +1375,12 @@ ALLOW_REGISTRATION=False
 
 ### 12.6 构建、启动、建管理员
 
-> ★★★ **先把证书签好再往下走。** `nginx.conf` 的 443 块会去加载
-> `/etc/letsencrypt/live/<域名>/fullchain.pem` —— 文件不存在的话
-> nginx **直接起不来**（容器会一直 Restarting）。
-> 完整步骤见 12.10 的第 1 步，那一步现在**排在本节前面**。
+> ★ **容器不依赖证书，所以这一节可以先做完，再去配宝塔。**
+> 证书和 443 都在宝塔那一层（12.10），`web` 容器只监听 80、只讲明文。
+>
+> ★ 但**顺序仍然重要**：容器起来之后，浏览器打不开域名是正常的 ——
+> 那说明宝塔那边的站点和反向代理还没配（12.10 第 1~2 步）。
+> 别在这个状态下反复重启容器，问题不在容器里。
 
 ```bash
 docker compose build              # ★ 先构建（前端构建最慢，3~5 分钟）
@@ -1390,7 +1447,7 @@ docker compose exec web ls /var/www/media            # ★ nginx 那一侧只读
 | --- | --- | --- |
 | 打开 `https://<域名>/` | 登录页正常，**地址栏是绿锁**，F12 无 CORS 报错 | 12.10 的证书那几条 |
 | **在文章详情页按 F5** | 正常显示，不是 404 | `nginx.conf` 的 `try_files` 那行 |
-| 生成一篇文章，掐表 | **2 分钟内出结果，无 504** | nginx `proxy_read_timeout` / LLM Key |
+| 生成一篇文章，掐表 | **2 分钟内出结果，无 504** | **两层 nginx 的 `proxy_read_timeout`**（宝塔那层默认只有 60s）/ LLM Key |
 | 连点生成按钮 | 出现**中文**「操作太频繁了，请稍后再试」 | 限流配置 |
 | 跑到单用户额度上限 | 出现「达到每日上限（20 篇）」 | 额度配置 |
 | **生成一张配图** | 图能显示出来（**不是裂图**） | 见下面那条「配图专项」 |
@@ -1472,12 +1529,16 @@ docker compose up -d backend      # ★ 这一句才会让新配置生效（重�
 >
 > | 改的变量 | 要重建 |
 > | --- | --- |
-> | `PUBLIC_HOST` / `WEB_PORT` / `HTTPS_PORT` / `ADMIN_URL_PATH` | `web` |
+> | `WEB_PORT` / `WEB_BIND` / `ADMIN_URL_PATH` | `web` |
 > | `ALLOWED_HOSTS` / `CSRF_TRUSTED_ORIGINS` / `USE_HTTPS` / `SECURE_HSTS_*` / `SITE_ORIGIN` / `MEDIA_PUBLIC_BASE_URL` | `backend` |
 > | `DB_*` | `backend`（`db` 自己的密码改不了，见 12.11 的 `Access denied` 那行） |
 >
-> 改完 `WEB_PORT` 尤其别忘了 —— 它决定宿主机哪个端口通到 nginx 的 80，
-> 不重建的话新端口根本没被监听。
+> 改完 `WEB_PORT` 尤其别忘了 —— 它决定宿主机哪个端口通到容器的 80。
+> 不重建的话新端口根本没被监听，而**宝塔那边的反向代理还指着老端口**，
+> 症状是 502 Bad Gateway（12.10 第 2 步）。
+>
+> ★ `WEB_BIND` 改了**必须重建**才生效，这一点比 `WEB_PORT` 更要紧 ——
+> 它决定这个端口是不是对公网敞开，而它敞开就等于敞开了请求头伪造（12.10「埋雷」）。
 
 > ★ **改 `.env` 之后不 `up -d` 是没用的。** 环境变量是在**容器创建时**
 > 注入进去的，改文件不会影响已经在跑的容器 —— 你会对着一个明明改对了的
@@ -1568,197 +1629,241 @@ docker run --rm -v agent_ai_biaoshu_uploads:/data -v "$HOME:/backup" alpine tar 
 > 但 Let's Encrypt 对这类共享域名有严格速率限制且不受你控制，
 > **不建议依赖**。自己买个最便宜的域名（.xyz / .top，一年几十块）就行。
 
+#### 这条路长什么样
+
+```
+浏览器
+  │  https://jiesangai.online        ← 证书在这一层，443
+  ▼
+宝塔 nginx（宿主机，独占 80 / 443）
+  │  同时还在服务同一台机器上的 supermanapi.online
+  │  proxy_pass http://127.0.0.1:8080
+  ▼
+web 容器（nginx，只监听 80、只讲明文 HTTP）
+  │    /api/  /admin/  /static/  →  proxy_pass http://backend:8000
+  │    /media/                   →  直接从 uploads 卷发文件，不进 Django
+  ▼
+backend 容器（gunicorn / Django）
+  ▼
+db 容器（MySQL 8）
+```
+
+#### ★ 为什么让宝塔做 TLS，而不是让容器自己终结
+
+**因为那台机器上已经有一个站在宝塔上。**
+
+本文档实际部署时查到的：80 和 443 都被宝塔的 nginx 占着
+（`/www/server/nginx/sbin/nginx`），上面挂着 `supermanapi.online`，
+而且宝塔面板本身是活的（`BT-Panel` / `BT-Task` 两个进程都在跑）。
+
+这种机器上让 `web` 容器去抢 80/443 会连环出事：
+
+| 后果 | 说明 |
+| --- | --- |
+| 容器根本起不来 | `Bind for 0.0.0.0:80 failed: port is already allocated` |
+| 另一个站会下线 | 停掉宝塔的 nginx = `supermanapi.online` 一起挂 |
+| 而且未必停得住 | `BT-Task` 是个活着的守护进程，可能把 nginx 再拉回来，变成拉锯 |
+
+所以正确做法是**顺着宝塔来**：它继续独占 80/443、继续管证书，
+我们的容器退到一个不冲突的端口，由它反代进来。两个站互不影响。
+
+代价是多了一层转发，于是多出两个**必须手工配、漏了整站打不开**的东西
+（第 2 步）。下面第 2 步是全文最需要注意的一节。
+
 #### 上 HTTPS 要动的东西（都在这个仓库里，已经改好了）
 
 | 文件 | 改了什么 |
 | --- | --- |
-| `frontend/nginx.conf` | 拆成两个 server 块：80 只做跳转 + 证书验证 + 探活，443 才是真正的站点 |
-| `frontend/Dockerfile` | 新增 `PUBLIC_HOST` 环境变量；健康检查从 `/` 改成 `/healthz` |
-| `docker-compose.yml` | 挂载 `/etc/letsencrypt`（只读）和 `/var/www/certbot`；新增 443 端口映射 |
-| `backend/config/settings.py` | HSTS 三个值改成可配；新增 `SECURE_REDIRECT_EXEMPT` 豁免健康检查 |
-| `.env.deploy.example` | 新增 `PUBLIC_HOST` / `HTTPS_PORT` / `SECURE_HSTS_*`，域名相关的项全部改成 `https://` |
+| `frontend/nginx.conf` | 改回**单 server 块、纯 HTTP**：删掉 443 块、TLS 配置、ACME 路径和 HTTP→HTTPS 跳转（这些归宝塔）；三个反代点的 `X-Forwarded-Proto` 从 `$scheme` 改成**透传** `$http_x_forwarded_proto` |
+| `frontend/Dockerfile` | 去掉 `EXPOSE 443` 和 `PUBLIC_HOST`；健康检查打 `/healthz` |
+| `docker-compose.yml` | 去掉证书卷挂载和 443 端口映射；`WEB_BIND` 默认值改成 `127.0.0.1` |
+| `backend/config/settings.py` | HSTS 三个值改成可配；新增 `SECURE_REDIRECT_EXEMPT` 豁免健康检查（避免假 healthy） |
+| `.env.deploy.example` | 删掉 `PUBLIC_HOST` / `HTTPS_PORT`；域名相关的项全部改成 `https://你的域名` |
 
-**你要做的**是下面这几步服务器操作 —— 签证书那件事必须在第一次
-`docker compose up` **之前**做完，因为 nginx 起不来如果没有证书。
+**你要做的**是下面四步服务器操作。
 
 ---
 
-#### 第 1 步：签证书（**顺序上排在 12.6 之前**）
+#### 第 1 步：在宝塔里建站点
 
-##### 1.1 先让出 80 端口
+宝塔面板 → **网站** → **添加站点**：
 
-```bash
-sudo ss -lntp | grep -E ':(80|443)\s'     # 先看谁占着
+| 项 | 填什么 |
+| --- | --- |
+| 域名 | 你的域名（不带 `www`，不带端口） |
+| 根目录 | 随便填，**其实用不上** —— 我们只借它的反向代理 |
+| FTP / 数据库 | 都不创建 |
+| PHP 版本 | **纯静态** |
+
+建完宝塔会在 `/www/server/panel/vhost/nginx/` 下生成一个 `<域名>.conf`。
+
+> ★ **面板打不开的话**：先确认云安全组放行了面板端口（宝塔默认 8888）。
+> 面板进程本身可能是活的 —— `ps aux | grep BT-Panel` 看一眼，
+> 有进程就说明只是网络到不了，不是面板坏了。
+
+#### 第 2 步：配反向代理 —— ★★★ 三个必须手改的地方
+
+宝塔 → 网站 → 点你的域名 → **反向代理** → 添加反向代理：
+
+| 项 | 填什么 |
+| --- | --- |
+| 代理名称 | 随便，比如 `biaoshu` |
+| 目标 URL | `http://127.0.0.1:8080` |
+| 发送域名 | `$host` |
+
+保存之后，**宝塔生成的那段配置还不够用**，要手工补。
+点该站点的 **配置文件**，找到 `location /` 里含
+`proxy_pass http://127.0.0.1:8080;` 的那一段，确认有这四行：
+
+```nginx
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;     # ★★★ 最要命的一行
 ```
 
-- **没有输出** → 80/443 都空着，直接跳到 1.2。
-- **`nginx` / `bt` 占着 `:80`** → 宝塔自带的 nginx，按 12.2 那个方框里的
-  `systemctl stop nginx && systemctl disable nginx` 停掉。
-  **如果这台机器上还有别的网站，先别停** —— 方案要改成让宝塔做反向代理。
-- **别的进程占着 `:443`** → 改 `.env` 里的 `HTTPS_PORT` 换个端口，
-  nginx 配置一个字都不用动。
+然后**再加两行超时**：
 
-##### 1.2 确认域名解析对了
+```nginx
+proxy_read_timeout 600s;                        # ★★★ 不加，长文生成必然 504
+proxy_send_timeout 600s;
+```
+
+改完保存，宝塔会自动 reload nginx。
+
+---
+
+**① 为什么 `X-Forwarded-Proto` 是必须的**
+
+Django 打开 `USE_HTTPS` 之后有 `SECURE_SSL_REDIRECT`，它判断
+"这个请求算不算 https"的**唯一依据**就是这个头
+（`settings.py` 里的 `SECURE_PROXY_SSL_HEADER`）。
+
+而请求链路是「浏览器 --https--> 宝塔 --**http**--> 容器」——
+宝塔到容器那一段是**明文**。所以宝塔必须明确告诉下游
+"原始请求是 https"，否则：
+
+```
+Django 认为请求是 http → 301 到 https://<域名><同一路径>
+  → 浏览器照做 → 宝塔再转发进来（还是明文）
+    → Django 又认为 http → 又 301 → …… 无限循环
+```
+
+浏览器最后报**「重定向次数过多」**，整站打不开。
+
+★★ 这个故障极具迷惑性：`docker compose ps` 里每个容器都是
+`healthy`，因为健康检查走的是容器内部、根本不经过这条路。
+你看到的是"容器全好，但网站打不开"。
+
+> ★ 容器里那个 nginx **不会**替你补上这个头 —— 它是**透传**宝塔给的值
+> （`$http_x_forwarded_proto`），因为容器自己看到的 `$scheme` 恒等于 `http`。
+> 两边必须接上，缺哪一边都是循环重定向。
+
+**② 为什么超时必须调大**
+
+一次文章生成是**同步**请求（联网搜索 + 读网页 + 多轮大模型），
+耗时 30~120 秒，最坏情况更久。
+
+容器里的 nginx 已经配了 600 秒，但**宝塔那层默认只有 60 秒** ——
+不调大的话，请求在宝塔就被切断了，容器里配多长都没用。
+用户在界面上看到的是"服务器错误"，而后端其实还在老老实实地跑
+（`docker compose logs -f backend` 能看到它继续跑完）。
+
+**③ 顺带确认一下 `Host`**
+
+`ALLOWED_HOSTS` 校验的就是 `Host` 头。宝塔的"发送域名"填 `$host`
+时会把原始域名透传下来，容器里的 nginx 再用 `proxy_set_header Host $host`
+继续往后传 —— Django 最后看到的就是 `你的域名`，和 `ALLOWED_HOSTS` 对得上。
+
+如果这一环断了，症状是 Django 返回
+**400 `Invalid HTTP_HOST header`**，而且**不会告诉你它期望什么**。
+
+---
+
+#### 第 3 步：申请证书 + 强制 HTTPS
+
+**先确认域名已经解析到这台机器**，否则申请必然失败：
 
 ```bash
 dig +short <你的域名>       # 输出的应该就是这台服务器的公网 IP
 ```
 
-没有输出、或者不是这台机器，先去域名商那边加一条 **A 记录**指过来，等生效再继续。
-**解析没生效时 Let's Encrypt 的验证必然失败**，而且失败信息不会告诉你这一点。
+没有输出、或者不是这台机器，先去域名商那边加一条 **A 记录**，
+等生效再申请。`NOERROR` 但 Answer 为空 = 记录不存在，等多久都不会出现。
 
-##### 1.3 放行 80 和 443
+解析没问题后：宝塔 → 网站 → 你的域名 → **SSL** →
+**Let's Encrypt** → 勾选域名 → 申请。
 
-见 12.2 —— **本机防火墙和云厂商安全组是两道墙，都要开**。
-Docker 是通过 iptables 下发端口映射的、**绕过 UFW**，
-所以真正说了算的往往是安全组那一侧。
+申请成功后，把 **「强制 HTTPS」** 开关打开。
 
-##### 1.4 签发
+> HTTP→HTTPS 的跳转**由宝塔做**，容器里那个 nginx **故意没做** ——
+> 两边都做容易打架（跳转目标不一致时会互相踢成循环）。
 
-```bash
-sudo apt update && sudo apt install -y certbot
+> ★ **证书续期也归宝塔管**，它在到期前会自动续，你什么都不用做。
+> 这是走宝塔这条路的一个附带好处：不用自己折腾 certbot 的续期钩子。
 
-# ★ 此刻应用还在 8080 上跑，80 端口是空的，所以这一步
-#   **不需要停任何容器**，也不会中断服务。
-sudo certbot certonly --standalone -d <你的域名> --email <你的邮箱> --agree-tos -n
-
-sudo ls /etc/letsencrypt/live/<你的域名>/    # 应该看到 fullchain.pem / privkey.pem
-```
-
-> **失败了怎么看**：`sudo tail -30 /var/log/letsencrypt/letsencrypt.log`。
-> 两个最常见的原因：① 域名没解析到这台机器（1.2）；
-> ② 80 端口没放行（1.3 的安全组）。
-
-> ★ 用的是 `--standalone` 而不是 webroot：webroot 要求 nginx 先跑起来服务验证文件，
-> 但 nginx 又要先有证书才能启动 —— 先有鸡还是先有蛋。
-> **首次签发这一刻不存在这个矛盾**（80 是空的），所以用 standalone 最直白。
-> 但**续期**必须换成 webroot，见第 3 步。
-
----
-
-#### 第 2 步：填 `.env`、重建
+#### 第 4 步：填 `.env`、重建
 
 ```bash
 cd /path/to/agent_ai_biaoshu
 git pull
 cp .env .env.bak-$(date +%F)     # 改坏了好回滚（.gitignore 会忽略它，不会误提交）
-nano .env                        # 按 12.4 那张表改九项
+nano .env                        # 按 12.4 那张表改
 ```
 
-必改的九项见 **12.4**，其中最容易漏的是：
+最容易漏的几项：
 
 ```ini
-PUBLIC_HOST=你的域名                          # 不带 https://，不带结尾斜杠
-WEB_PORT=80                                  # 从 8080 改过来
-HTTPS_PORT=443
+WEB_PORT=8080                                # ★ 不要改成 80 —— 那是宝塔的
+WEB_BIND=127.0.0.1                           # ★ 不要改成 0.0.0.0，见下面「埋雷」
 ALLOWED_HOSTS=你的域名,127.0.0.1,localhost     # 127.0.0.1 不能删
 CSRF_TRUSTED_ORIGINS=https://你的域名          # ★ 必须带 https://
 SITE_ORIGIN=https://你的域名
-MEDIA_PUBLIC_BASE_URL=https://你的域名         # 不留着 http:// 的话图会被拦
+MEDIA_PUBLIC_BASE_URL=https://你的域名         # 留着 http:// 的话粘出去的图会被拦
 USE_HTTPS=True
 SECURE_HSTS_SECONDS=300                      # ★ 先短后长，见下面「HSTS」
 ```
 
 ```bash
-sudo mkdir -p /var/www/certbot    # 给第 3 步的 webroot 用
 docker compose up -d --build      # --build 是必需的：nginx.conf 和 Dockerfile 都改了
 docker compose ps                 # web / backend 都应该是 healthy
 ```
 
-> ★ 到这一步 `http://<公网IP>:8080` 就失效了，换成 `https://你的域名`。
->
 > ★ 改 `.env` 必须靠 `up -d` 才生效 —— `restart` **不会重新读 `env_file`**。
-
----
-
-#### 第 3 步：把续期从 standalone 切到 webroot（**★ 这步不能跳**）
-
-第 1 步那一次是手工签的。certbot 装好后自带一个 systemd timer 每天跑两次
-`renew`，**但它会沿用签发时的验证方式** —— 也就是 standalone。
-而那时 80 端口已经被 `web` 容器占着了，certbot 绑不上 → **续期永远失败**。
-
-现在 nginx 已经在 80 上服务验证文件了，把方式换掉：
-
-```bash
-certbot --version
-```
-
-```bash
-# certbot >= 2.3（Ubuntu 24.04 / Debian 13 等）—— 推荐，它会顺带验证一次：
-sudo certbot reconfigure --cert-name <你的域名> --webroot -w /var/www/certbot
-
-# certbot < 2.3（Ubuntu 22.04 / Debian 12）：
-sudo certbot certonly --webroot -w /var/www/certbot -d <你的域名> --force-renewal
-```
-
-两条都是**零停机**：只往 `/var/www/certbot` 写个验证文件，不碰容器。
-
-```bash
-# 让 nginx 在续期后重新加载证书
-# （nginx 只在启动时把证书读进内存，换了文件它不会自己发现）
-sudo tee /etc/letsencrypt/renewal-hooks/post/reload-web-nginx.sh > /dev/null <<'EOF'
-#!/bin/sh
-docker compose -f /path/to/agent_ai_biaoshu/docker-compose.yml exec -T web nginx -s reload || true
-EOF
-sudo chmod +x /etc/letsencrypt/renewal-hooks/post/reload-web-nginx.sh
-```
-
-> ★ hook 里要写 compose 文件的**全路径**：certbot 的 hook 以 root 身份、
-> 在 `/` 目录下跑，用相对路径找不到文件。
 >
-> ★ 末尾的 `|| true`：即使 reload 失败（比如容器正好没在跑），
-> **续期本身已经成功、证书文件已经落盘**，不该让 hook 的返回值把这件事报成失败。
->
-> ★ 用 post hook 而不是 `--deploy-hook`：后者**只在成功时跑**，
-> 而且得写在续期配置里；`renewal-hooks/` 下的脚本是文件形式的，最不容易配错。
-
-**为什么非要换成 webroot** —— 不是为了省那几秒，是**失败方向不一样**：
-
-| | 停/起容器（纯 standalone） | webroot（本方案） |
-| --- | --- | --- |
-| 续期的动作 | 停掉 web 容器 → certbot 占 80 → 签 → 把容器起回来 | 往目录里写一个文件，什么都不碰 |
-| 失败的后果 | 容器没起回来 → **站点一直挂着**，几天后才发现 | 证书没换成，**站点照常**，旧证书还有 30 天 |
-
-左边那个的坑在于：compose 里的 `restart: unless-stopped` 意味着
-**被手动停掉的容器不会自己回来**，连重启机器也不回来。
-
-跳过了第 3 步会怎样：站点不会挂（失败方向是安全的），
-但 60 天后证书会真的过期，浏览器开始报证书错误。
-
----
-
-#### 第 4 步：演练一遍
-
-```bash
-sudo certbot renew --dry-run
-```
-
-用 Let's Encrypt 的**测试**服务器，不消耗正式额度。看到 `Congratulations` 就成了。
-webroot 模式下**演练期间网站不会中断**。
+> ★ `http://<公网IP>:8080` 从现在起**从外面打不开了**，这是故意的
+> （绑在 `127.0.0.1` 上）。本地要验证用 `curl -I http://127.0.0.1:8080/healthz`。
 
 ---
 
 #### 验证清单（HTTPS 专项，和 12.7 那份一起做）
 
 ```bash
-curl -I http://<域名>                        # 期望 301 → https://<域名>/
-curl -I https://<域名>                       # 期望 200
-curl -s http://<域名>/healthz                # 期望 200 + "ok"
-curl -I https://<域名>/media/<一张真实存在的图>  # 期望 200 + Content-Type: image/jpeg
+curl -I  http://<域名>                        # 期望 301 → https://<域名>/
+curl -I  https://<域名>                       # 期望 200
+curl -s  https://<域名>/healthz               # 期望 200 + "ok"
+curl -I  https://<域名>/media/<一张真实存在的图>  # 期望 200 + Content-Type: image/jpeg
+
+curl -I  http://127.0.0.1:8080/healthz        # 在服务器上跑，期望 200（容器直接可达）
 ```
 
-**① ★ 静态文件那个死循环**（这一条最容易漏，而且症状会误导人）
+**① ★★★ 静态文件那个死循环**（最容易漏，症状最误导人）
 
 ```bash
 curl -sI https://<域名>/static/admin/css/base.css | head -3
 ```
 
-期望 **200**。如果是 301/302，说明 `location /static/` 少了
-`proxy_set_header X-Forwarded-Proto $scheme;` —— Django 认为请求是 http、
-301 到 https，nginx 转发时又没带这个头，于是**无限重定向**。
-症状是「后台能登录，但完全没有样式」，和 `collectstatic` 没跑一模一样。
+期望 **200**。如果是 301 / 302 → **宝塔那边的 `X-Forwarded-Proto`
+没配上**（第 2 步 ①）。症状是「后台能登录，但**完全没有样式**」，
+和 `collectstatic` 没跑长得一模一样，很容易查错方向。
 
-**② 证书本身**
+**② 长文生成不会被中途切断**（对应第 2 步 ②那两行 timeout）
+
+在浏览器里真的生成一篇长文章，等它跑完。
+如果 60 秒左右就报"服务器错误"、而后端日志显示它还在正常跑，
+就是宝塔那层超时没改。
+
+**③ 证书本身**
 
 ```bash
 echo | openssl s_client -connect <域名>:443 -servername <域名> 2>/dev/null \
@@ -1767,24 +1872,26 @@ echo | openssl s_client -connect <域名>:443 -servername <域名> 2>/dev/null \
 
 期望 `subject` 是你的域名、`issuer` 是 Let's Encrypt、`notAfter` 约 90 天后。
 
-**③ 续期配置真的切成 webroot 了**
+**④ ★ 宝塔上另一个站没被影响**
 
 ```bash
-sudo grep -E 'authenticator|webroot_path' /etc/letsencrypt/renewal/<域名>.conf
-# 期望：authenticator = webroot    webroot_path = /var/www/certbot
-sudo systemctl list-timers | grep certbot      # 确认 timer 是 active 的
+curl -I https://supermanapi.online      # 期望还是它原本的状态码（200）
 ```
 
-**④ 浏览器**
+这条是整条路线的**全部理由**，一定要确认一下。
 
-1. 打开 `https://<域名>` —— 锁是绿的
-2. **打开后台，确认有样式**（对应上面 ①）
+**⑤ 浏览器**
+
+1. 打开 `https://<域名>` —— 锁是绿的，没有「不安全」警告
+2. 登录 → 打开一篇文章详情 → **后台（`/manage-8f3a91c7/`）也要开一次，
+   确认有样式**（对应上面 ①）
 3. F12 → Network → 点「复制到公众号」→ 看 `wechat-html` 的响应：
    `<img src>` 应该是 `https://<域名>/media/...`（https、无端口号）
-4. **★ 重点：把复制出来的内容粘进公众号编辑器，看图在不在。**
+4. **★ 重点：把复制出来的内容粘进公众号编辑器，看文字和图。**
    上 HTTPS 之后 `navigator.clipboard` 变成可用，代码会走**主路径**
    （HTTP 下走的是 `execCommand` 兜底）—— 这是一次**真实的行为切换**，
    上线前能用不代表上线后没问题，必须重测。
+   如果图之前裂、现在好了，就确认是混合内容问题。
    如果弹出「浏览器不允许自动复制」，把现象告诉我，我们再调
    `frontend/src/utils/clipboard.ts`（大概率是取正文那个请求耗掉了用户手势）。
 
@@ -1800,8 +1907,9 @@ sudo systemctl list-timers | grep certbot      # 确认 timer 是 active 的
 浏览器会拒绝回退到明文 —— 等于把一次配置事故放大成一年。
 
 `SECURE_HSTS_INCLUDE_SUBDOMAINS` 默认填 `False`：
-含子域会把 `你的域名` 下面**每一个**子域都锁进 HTTPS，
-将来想在这台机器上跑点别的 http 服务会直接打不开，而且改回来要等 max-age 过期。
+含子域会把你的域名下面**每一个**子域都锁进 HTTPS。
+这台机器上还有别的站（比如那个 New API 网关），
+将来想给别的子域跑点 http 服务会直接打不开，而且改回来要等 max-age 过期。
 
 > ★ **忘了改成一年也不会有故障**，只是 HSTS 的保护弱一些。不用紧张。
 
@@ -1811,19 +1919,31 @@ sudo systemctl list-timers | grep certbot      # 确认 timer 是 active 的
 
 | 没做 | 为什么 |
 | --- | --- |
-| OCSP stapling（`ssl_stapling`） | Let's Encrypt 已经在 2025 年停掉了 OCSP 服务，开了只会让 nginx 白等一个不来的响应 |
-| `ssl_dhparam` | `nginx.conf` 里的 cipher 列表全是 ECDHE，没有 DHE 套件，用不上 |
-| nginx 里发 HSTS 头 | HSTS 由 Django 统一发。nginx 的 `add_header` 是**子块覆盖父块**：任何 location 里出现一个 `add_header`，server 级的所有 `add_header` 就全被丢掉 —— 两处都发只会让规则更难推理 |
+| 容器里不做 TLS | 宝塔已经在做了。两边都做只会多一层要同步的东西，而且容器那份证书会被宝塔的续期甩在身后 |
+| 容器里不做 HTTP→HTTPS 跳转 | 宝塔的「强制 HTTPS」在做。两边都跳、目标又对不齐时，会互相踢成循环 |
+| 容器里不放 ACME 验证路径 | 证书归宝塔签和续，验证文件走的是宝塔自己那个 80 端口上的站点 |
+| 容器里发 HSTS 头 | HSTS 由 Django 统一发。nginx 的 `add_header` 是**子块覆盖父块**：任何 location 里出现一个 `add_header`，server 级的所有 `add_header` 就全被丢掉，两处都发只会让规则更难推理 |
 | HSTS preload | 进了浏览器内置列表想移除要等各个浏览器发版，以月计。没必要 |
-| `listen [::]:443` | Docker 默认不给容器 IPv6，加了会 `socket() failed (97: Address family not supported)` 直接起不来，而这个报错看着像端口被占，很难查 |
-| 证书进备份 | 丢了能重签。**`.env` 相反，一定要留好**（它含全部密钥，别往网盘丢） |
+| 给这个站单独开一个子域 | 那还要再签一张证书、多一个解析。主域名直接用更省事 |
+| 证书进备份 | 现在证书由宝塔管，连备份都不用操心。**`.env` 相反，一定要留好**（它含全部密钥，别往网盘丢） |
 
 #### 一个容易埋雷的地方
 
-**不要为了调试把 8000 端口映射出来。** `SECURE_PROXY_SSL_HEADER` 一旦配上，
-Django 会无条件信任 `X-Forwarded-Proto` 头 —— 正常情况（只有 nginx 能访问 backend）
-没问题，但任何人只要能直连 8000，就能自己发一个 `X-Forwarded-Proto: https` 骗过它。
-容器里的调试用 `docker compose exec backend ...`，不要开端口。
+**`WEB_BIND` 必须是 `127.0.0.1`，不要改成 `0.0.0.0`。**
+
+`SECURE_PROXY_SSL_HEADER` 一旦配上，Django 就**无条件信任**
+`X-Forwarded-Proto` 头。而容器里的 nginx 是**原样透传**这个头的 ——
+所以只要 8080 能从公网直连，任何人都能绕过宝塔、
+自己伪造一个 `X-Forwarded-Proto: https`，让 Django 把一个明文请求
+当成加密请求处理。这正是 `SECURE_PROXY_SSL_HEADER` 的经典用法错误。
+
+绑在回环地址上，就只有宿主机上的宝塔能连到它。
+
+> ★ 同理，**永远不要为了调试把 backend 的 8000 端口映射出来。**
+> 容器里调试用 `docker compose exec backend ...`，不要开端口。
+>
+> ★ 这条也是 `8080` **不需要**在云安全组里放行的原因 ——
+> 安全组里开的 80/443 是给宝塔用的，和这个容器无关。
 
 ---
 
@@ -1840,14 +1960,16 @@ docker compose exec db mysql -u root -p -e "SHOW DATABASES;"   # 数据库通不
 | 症状 | 最可能的原因 |
 | --- | --- |
 | `docker compose ps` 一直 `Restarting` | `.env` 没配好 → `docker compose logs backend` 第一行会写清楚 |
-| **`web` 一直 `Restarting`，日志里说找不到证书文件** | `.env` 的 `PUBLIC_HOST` 和证书签给的名字对不上 → `sudo certbot certificates` 看实际名字 |
-| **`web` 起不来，报 `port is already allocated`** | 80/443 被占了（多半是宝塔自带的 nginx）→ 见 12.2 那个方框 |
-| 网页打不开，`curl localhost` 却正常 | **云厂商安全组**没放行 80 / 443（不是 UFW） |
-| **浏览器报「连接不安全」/ 证书错误** | ① 证书过期了 → `sudo certbot certificates`；② 域名和证书不匹配；③ 访问的是 IP 不是域名 |
-| **`http://` 打不开、`https://` 正常** | 正常。80 就是用来跳转的 —— 但证书**续期要靠 80**，所以安全组 80 不能关 |
-| **证书 90 天后过期了，没自动续上** | 第 3 步（切 webroot）没做，或没做成功 → `sudo grep authenticator /etc/letsencrypt/renewal/<域名>.conf`，期望 `webroot` |
+| **浏览器报「重定向次数过多」，整站打不开** | 宝塔没发 `X-Forwarded-Proto`（12.10 第 2 步 ①）。★ 极具迷惑性：`docker compose ps` 里容器全是 `healthy` |
+| **`web` 起不来，报 `port is already allocated`** | `WEB_PORT` 被改成了 `80` —— 那是宝塔的。改回 `8080`，见 12.10「埋雷」 |
+| **`502 Bad Gateway`（宝塔的报错页）** | ① 容器没起来 → `docker compose ps`；② 宝塔反代的目标端口和 `WEB_PORT` 对不上（12.4 那张表） |
+| 网页打不开，`curl 127.0.0.1:8080/healthz` 却正常 | 宝塔那层没通：站点没建、反代没配，或**云安全组**没放行 80/443 |
+| **浏览器报「连接不安全」/ 证书错误** | 宝塔里证书没签成或没选中 → 网站 → SSL 看状态；也确认访问的是域名不是 IP |
+| **`http://` 打不开、`https://` 正常** | 正常。宝塔的「强制 HTTPS」在跳转 —— 证书**续期要靠 80**，所以安全组 80 不能关 |
+| **证书 90 天后过期了，没自动续上** | 宝塔里的自动续期没跑成 → 网站 → SSL → 续签 看提示。★ 这不是 certbot，别去 `certbot certificates` 里找 |
 | 页面能打开，接口全部失败 | nginx 还指着旧 backend IP → `docker compose restart web` |
-| 生成大文章必然 504 | nginx `proxy_read_timeout` 不是 `600s` |
+| 生成大文章必然 504 | **两层都有超时，都得看**：容器里 nginx 的 `proxy_read_timeout` 不是 `600s`，或**宝塔那层还是默认的 60s**（12.10 第 2 步 ②） |
+| 60 秒左右报错，但 `docker compose logs -f backend` 显示它还在正常跑完 | 症状同上，而且**几乎肯定是宝塔那层** —— 容器里那层已经配好了 |
 | 后台能登录但没样式 | ① 上线 HTTPS 之后：`location /static/` 少了 `X-Forwarded-Proto`（见 12.10 验证清单 ①）；② `collectstatic` 没跑成功 → 看 backend 启动日志 |
 | **`backend` 容器一直 unhealthy，但功能正常** | `SECURE_REDIRECT_EXEMPT` 没生效：健康检查拿到 301，而 `curl -f` 把 3xx 也算成功 |
 | `400 Invalid HTTP_HOST header` | `ALLOWED_HOSTS` 里少了你访问用的那个名字 |

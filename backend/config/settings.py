@@ -92,12 +92,20 @@ CSRF_TRUSTED_ORIGINS = (
 # ---------------------------------------------------------------------------
 # 生产环境安全开关
 # ---------------------------------------------------------------------------
-# ★ 域名 + Let's Encrypt 证书就位之后，把 .env 里的 USE_HTTPS 改成 True，
+# ★ 域名 + HTTPS 就位之后，把 .env 里的 USE_HTTPS 改成 True，
 #   下面这一整块会自动全部生效，代码一个字都不用改。
-#   完整步骤（签证书、nginx 两个 server 块、续期钩子）见 README 12.10。
+#   部署步骤（宝塔建站点、反代、加请求头、一键 SSL）见 README 12.10。
 #
-# ★ 打开它的前提是**外面真的有一层 HTTPS 终结**（nginx 的 443 块）。
+# ★ 打开它的前提是**外面真的有一层 HTTPS 终结** —— 这套部署里是
+#   宿主机上的宝塔 nginx（容器只讲明文 HTTP，只对回环地址讲）。
 #   在纯 HTTP 环境打开 = 无限重定向。
+#
+# ★★ 而且那一层必须发 X-Forwarded-Proto 请求头。Django 判断
+#    "这个请求算不算 https"的**唯一**依据就是它（见下面的
+#    SECURE_PROXY_SSL_HEADER）—— 少了它，Django 把 https 请求当成 http，
+#    301 到 https，绕回来还是被当成 http …… 无限重定向，整站打不开。
+#    这个头由宝塔发、由我们容器里的 nginx **原样透传**给后端
+#    （frontend/nginx.conf 里用的是 $http_x_forwarded_proto，不是 $scheme）。
 USE_HTTPS = env_bool("USE_HTTPS", False)
 
 # 是否启用 whitenoise 来提供静态文件（Admin 的 CSS 就靠它）。

@@ -6,6 +6,12 @@
 #
 # 最终镜像里没有 Node，也没有 node_modules —— 只有几十 MB 的静态文件和 nginx。
 # 构建产物是纯静态的，不需要任何运行时环境。
+#
+# ★★ 这个容器**只监听 80、只讲明文 HTTP**，不碰 TLS。
+#    对外的 HTTPS 由宿主机上的宝塔 nginx 终结，宝塔再反代到
+#    127.0.0.1:8080。为什么是宝塔而不是让这个容器独占 80/443：
+#    那台机器上还有别的网站在宝塔上，抢端口会把它们一起搞挂。
+#    完整说明见 README 12.10。
 # ============================================================
 
 # ------------------------------------------------------------------
@@ -61,13 +67,11 @@ RUN rm -f /etc/nginx/conf.d/default.conf
 #   把 /etc/nginx/templates/*.template 里的 ${VAR} 用环境变量替换掉，
 #   生成到 /etc/nginx/conf.d/ 下（去掉 .template 后缀）。
 #
-#   我们需要它来注入两个值：
-#     ADMIN_URL_PATH —— 后台路径是可配置的
-#     PUBLIC_HOST    —— 域名。证书路径和 HTTP→HTTPS 跳转目标都要它
-#   而 nginx 配置里没法直接读环境变量。
+#   我们需要它来注入 ADMIN_URL_PATH —— 后台路径是可配置的
+#   （README 里建议改成一串随机字符），而 nginx 配置里没法直接读环境变量。
 #
 #   envsubst 只替换**环境里真实存在**的变量名，所以 $uri / $host
-#   这些 nginx 自己的变量会原样保留，不会被误伤。
+#   / $http_x_forwarded_proto 这些 nginx 自己的变量会原样保留。
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 
 # ★ 默认值必须给。
@@ -78,27 +82,16 @@ COPY nginx.conf /etc/nginx/templates/default.conf.template
 #   （这是个"响亮的失败"而不是静默错误，但仍然没必要让用户撞上。）
 ENV ADMIN_URL_PATH=admin/
 
-# ★ 域名。故意用 localhost 这个**明显错误**的默认值，而不是留空：
-#   配漏了的表现是 nginx 找不到 /etc/letsencrypt/live/localhost/fullchain.pem
-#   而起不来 —— 响亮的失败，一眼能看出是域名没配。
-#   如果留空，证书路径会变成 /etc/letsencrypt/live//fullchain.pem，
-#   报错信息会难懂得多。
-ENV PUBLIC_HOST=localhost
-
 # 只把构建产物搬过来，Node 和源码都不进最终镜像
 COPY --from=build /app/dist /usr/share/nginx/html
 
+# ★ 只有 80。443 不在这里 —— TLS 由宿主机上的宝塔终结（见文件开头）。
 EXPOSE 80
-EXPOSE 443
 
 # ★ 打 /healthz 而不是 /。
-#   原来打的是 http://127.0.0.1/ —— 上了 HTTPS 之后那个地址会 301 到
-#   https://127.0.0.1/，而证书是签给**域名**的，校验必然失败，
-#   这个容器会永远显示 unhealthy（功能其实完全正常，纯粹白排查）。
-#
-# ★ 也不能改成让健康检查走 https://127.0.0.1/healthz：
-#   这个镜像基于 alpine，wget 是 busybox 版，做不了正经的 TLS 校验。
-#   /healthz 是 80 块里一个直接 return 200 的 location，不碰后端。
+#   /healthz 是一个直接 return 200 的 location，不碰后端、不读磁盘，
+#   容器一起来就能通过。打 / 会走 try_files 去读 index.html，
+#   镜像没构建好时健康检查的失败原因会和"页面挂了"混在一起。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD wget -qS --spider http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1
 

@@ -17,12 +17,19 @@
 #   CORS 问题彻底消失，前端也能用相对路径 /api/v1，
 #   将来换域名不用重新构建前端。
 #
-# ★★ 这份配置现在假设**你有域名，并且已经签好证书**（nginx 的 443 块
-#    会加载 /etc/letsencrypt/live/${PUBLIC_HOST}/ 下的证书，
-#    没有证书 nginx 起不来）。签发的完整步骤见 README 12.10。
+# ★★ TLS 不在这一层终结。
 #
-#    想回到"只有公网 IP、纯 HTTP"的老用法：把 frontend/nginx.conf 里的
-#    443 块和 80 块的跳转注释掉，再把 .env 的 WEB_PORT 改回 8080。
+#    对外的 HTTPS 由**宿主机上的宝塔 nginx** 负责：它监听 80/443、
+#    持有证书、做 HTTP→HTTPS 跳转，再把请求反代到 127.0.0.1:8080，
+#    也就是下面的 web 容器。
+#
+#    这样做是因为这台机器上**还有别的网站在宝塔上**，两个 nginx
+#    抢同一个端口会把那个站一起搞挂。完整背景见 README 12.10。
+#
+#    ★ 配套的两个前提，缺一个网站就打不开：
+#      1) 宝塔的站点配置里必须发 X-Forwarded-Proto，且 Host 要透传
+#         —— 见 README 12.10 第 4 步
+#      2) WEB_BIND 保持 127.0.0.1，别把容器直接暴露到公网（见下面 ports）
 # ============================================================
 
 services:
@@ -140,14 +147,12 @@ services:
       #   所以这里拿到的和 backend 容器里的是同一个值。
       ADMIN_URL_PATH: ${ADMIN_URL_PATH:-admin/}
 
-      # ★ 域名。nginx 用它拼两个东西：
-      #     1) 证书路径 /etc/letsencrypt/live/<域名>/fullchain.pem
-      #     2) HTTP → HTTPS 跳转的目标地址
-      #   （跳转**不能**用 nginx 的 $host 来拼 —— 那个值来自请求头，
-      #     可以被伪造，会变成开放重定向。）
-      #
-      #   填错的表现是 nginx 起不来，报找不到证书文件 —— 响亮的失败。
-      PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
+      # ★ 这里**没有** PUBLIC_HOST 了。
+      #   容器内的 nginx 不再负责 TLS，也就不需要知道域名 ——
+      #   域名匹配、证书、跳转全在宝塔那边完成，
+      #   转发进来时 Host 头已经是原始域名了。
+      #   域名相关的配置都在 .env 里（ALLOWED_HOSTS / SITE_ORIGIN /
+      #   CSRF_TRUSTED_ORIGINS 等），由 backend 容器读取。
 
     volumes:
       # ★ 配图。nginx 直接从卷里发 /media/，请求根本不进 Django：
@@ -157,20 +162,9 @@ services:
       # ★ :ro 只读 —— nginx 只需要读，不需要也不该有写权限。
       - uploads:/var/www/media:ro
 
-      # ★ TLS 证书。由**宿主机**上的 certbot 签发和续期，容器只读。
-      #
-      #   整个 /etc/letsencrypt 一起挂，而不是只挂 live/<域名>：
-      #   live/ 里全是符号链接，指向 ../../archive/<域名>/...
-      #   只挂一层的话链接会断，nginx 报找不到文件。
-      #
-      #   ★ 首次签发是在**容器跑起来之前**做的（见 README 12.10 第 4 步），
-      #     所以这里挂载时目录已经存在。证书还没签就 up，nginx 会起不来。
-      - /etc/letsencrypt:/etc/letsencrypt:ro
-
-      # ★ 证书续期走 webroot 模式时，certbot 把验证文件写到这里，
-      #   再由 nginx 通过 http://<域名>/.well-known/acme-challenge/ 发出去。
-      #   挂成只读是因为容器只负责"发"，写的活由宿主机上的 certbot 干。
-      - /var/www/certbot:/var/www/certbot:ro
+      # ★ 这里**不再挂证书**。
+      #   证书属于宝塔，跟这个容器没关系 —— 我们只讲明文 HTTP，
+      #   而且只对回环地址讲（见下面的 ports）。
 
     depends_on:
       backend:
@@ -183,28 +177,22 @@ services:
         condition: service_started
 
     ports:
-      # 对外暴露的端口：80（跳转 + 证书验证）、443（真正的站点）。
-      # 防火墙只需要放行这两个（和 SSH）。
+      # ★★★ 只绑回环地址，**不要**改成 0.0.0.0。
       #
-      # ★ 上了 HTTPS 之后 WEB_PORT 要改成 **80**。
-      #   默认值仍然是 8080，是为了兼容"没有域名、纯 HTTP"的老用法。
+      #   这是安全问题，不是洁癖：容器里的 nginx 会把宝塔传来的
+      #   X-Forwarded-Proto **原样透传**给 Django，而 Django 拿它
+      #   判断"这个请求算不算 https"。一旦这个端口能从公网直连，
+      #   任何人都能绕过宝塔、自己伪造一个 X-Forwarded-Proto: https，
+      #   让 Django 把一个明文请求当成加密请求处理。
       #
-      # ★ 如果这台服务器上装了宝塔，它自带的 nginx 会占着 80，
-      #   这时候必须先把宝塔的 nginx 停掉并禁止自启（README 12.10 第 2 步），
-      #   否则这里会报：
-      #       Bind for 0.0.0.0:80 failed: port is already allocated
+      #   绑在 127.0.0.1 上，就只有宿主机上的宝塔能连到它。
       #
-      # ★ WEB_BIND 是监听地址，一般不用改：
-      #     0.0.0.0   直接对外
-      #     127.0.0.1 只有本机能连（前面还有一层别的反向代理时才这么用）
-      - "${WEB_BIND:-0.0.0.0}:${WEB_PORT:-8080}:80"
-
-      # ★ 443 单独一个变量，万一被别的服务占着可以换（改这里 + .env 的
-      #   HTTPS_PORT 即可，nginx 配置一个字都不用动 —— 容器内部永远是 443）。
+      # ★ 对外的 80/443 由**宝塔**监听，不需要在这里映射，
+      #   所以 8080 这个端口**不用**在云安全组里放行。
+      #   安全组里要开的 80/443 是给宝塔用的，跟这个容器无关。
       #
-      # ★ HTTPS_PORT 只活在 compose 这一层，**不要**加进上面的
-      #   environment: 里，那样它会变成 nginx 的变量名冲突隐患。
-      - "${WEB_BIND:-0.0.0.0}:${HTTPS_PORT:-443}:443"
+      # ★ 想换端口就改 .env 里的 WEB_PORT，容器内部永远是 80。
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:80"
 
     logging:
       driver: json-file
