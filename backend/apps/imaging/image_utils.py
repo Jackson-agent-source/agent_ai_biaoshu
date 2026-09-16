@@ -14,8 +14,8 @@
 
 **二、用户自己上传的照片不能直接信**（normalize_uploaded_photo）
 
-    字节来自浏览器，必须先解码验明是图片、必须去掉 EXIF（里面有 GPS），
-    再顺手缩到 1600px。详见那个函数的说明。
+    字节来自浏览器，必须先解码验明是图片、必须把 EXIF 里的方向烧进像素、
+    必须去掉 EXIF（里面有 GPS），再顺手缩到 1600px。详见那个函数的说明。
 
 本模块所有函数**不抛异常**：图片坏掉时返回原数据或 None，
 由上层把"这张图有问题"变成一句中文提示，而不是一个 500。
@@ -26,7 +26,7 @@ from __future__ import annotations
 import io
 import logging
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +195,25 @@ def normalize_uploaded_photo(data: bytes) -> tuple[bytes, str] | None:
          Pillow 重编码时默认不写 EXIF，所以这一步顺带就做到了。
          ★ 别为了"保留拍摄信息"去加 exif=... —— 那正是要扔掉的东西。
 
-      3. 手机照片动辄 4000px 宽、5MB 以上，而微信正文图硬性要求
+         ★★ 但**清 EXIF 之前必须先 exif_transpose**（下面第 3 点）。
+            顺序反了的话，方向信息就跟着 EXIF 一起没了。
+
+      3. **必须把 EXIF 里的方向"烧"进像素。** 手机竖着拍的照片，
+         文件里存的是**横的**，靠 EXIF 的 Orientation 标记告诉
+         查看器"显示时转 90°"。我们要把 EXIF 丢掉，那就必须在丢之前
+         用 ImageOps.exif_transpose() 把旋转真正应用到像素上。
+         不做这一步的后果是：竖拍的照片在公众号里**永久躺倒** ——
+         不是显示问题，是像素真的错了，而且信息已经丢了，事后无法补救。
+         （已经实测过：800x600 + Orientation=6 重编码后仍是 800x600，
+           方向标记被丢掉，再也转不回来。）
+
+         为什么不能只靠前端 canvas 转：前端确实会转一次
+         （utils/imageResize.ts，用 imageOrientation: 'from-image'），
+         但那条路**只在浏览器压得动的时候才走** —— 老浏览器、
+         canvas 被禁用、原图本来就小没走压缩，都会让**带 EXIF 的原图
+         直接传到后端**。两道都要有，各挡各的。
+
+      4. 手机照片动辄 4000px 宽、5MB 以上，而微信正文图硬性要求
          小于 1MB。反正要压，不如压在这一步：磁盘和带宽都省一遍。
 
     ★ 永远输出 JPEG：实拍图没有透明通道，PNG 只会更大。
@@ -215,6 +233,12 @@ def normalize_uploaded_photo(data: bytes) -> tuple[bytes, str] | None:
         # 到这一步说明字节根本不是能解码的图片（或者是个解压炸弹）
         logger.warning("上传的文件不是能识别的图片，%s 字节", len(data))
         return None
+
+    # ★★ 必须在丢掉 EXIF **之前**把方向应用到像素上（理由见 docstring 第 2、3 点）。
+    #    顺序反了 = 竖拍的照片永久躺倒。
+    #    exif_transpose 会把旋转真的做进像素，并把 Orientation 标记去掉；
+    #    没有 EXIF 的图（比如前端 canvas 压过的）它原样返回，是个空操作。
+    image = ImageOps.exif_transpose(image)
 
     rgb = _to_rgb(image)
 

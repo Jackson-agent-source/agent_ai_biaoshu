@@ -236,6 +236,26 @@ def photo_with_gps_exif(width: int = 800, height: int = 600) -> bytes:
     return buffer.getvalue()
 
 
+def portrait_photo_with_orientation(width: int = 800, height: int = 600) -> bytes:
+    """造一张"手机竖拍"的 JPEG：像素是横的，靠 EXIF 的 Orientation=6 竖过来。
+
+    ★ 这就是手机相册里照片的真实存法，不是编出来的边缘情况：
+      竖着拍的时候，传感器读出来是横的图，手机在 EXIF 里写一个
+      Orientation=6（顺时针转 90°），由查看器负责转。
+      所以**光看像素尺寸判断不出这张图该横还是该竖**。
+
+    ★ 参数刻意是 800x600（横）而函数名叫 portrait：
+      因为真实文件就是这样存的。处理完之后应该是 600x800。
+    """
+    exif = Image.Exif()
+    exif[0x0112] = 6  # Orientation: 顺时针 90°
+    buffer = io.BytesIO()
+    Image.new("RGB", (width, height), (200, 100, 50)).save(
+        buffer, format="JPEG", exif=exif.tobytes()
+    )
+    return buffer.getvalue()
+
+
 class TestNormalizeUploadedPhoto:
     """★ 用户上传的字节是**不可信**的，这个函数是唯一的验证点。
 
@@ -282,6 +302,43 @@ class TestNormalizeUploadedPhoto:
         content, content_type = result
         assert content_type == "image/jpeg"
         assert open_image(content).getexif() == {}
+
+    def test_bakes_exif_orientation_into_pixels(self):
+        """★★ 竖拍的照片必须真的竖过来，而不是"标记没了、图躺倒了"。
+
+        这条盯的是一个**做完就不可逆**的错误：EXIF 被清掉之后，
+        方向信息就只剩像素里那一份了。顺序写反（先清 EXIF / 直接重编码）
+        的结果是照片在公众号里永久躺倒 —— 而且事后无法补救，
+        只能让用户重新传一次，用户还完全不知道发生了什么。
+
+        ★ 断言的是**尺寸互换**（800x600 -> 600x800），不是"某个标记等于几"：
+          只有像素真的被转过了，宽高才会对调。这比断言 EXIF 更接近
+          "用户看到的是不是正的"这件事本身。
+        """
+        source = portrait_photo_with_orientation()
+        assert open_image(source).size == (800, 600)  # 文件里存的是横的
+        assert open_image(source).getexif().get(0x0112) == 6  # 样本确实是竖拍
+
+        result = normalize_uploaded_photo(source)
+
+        assert result is not None
+        image = open_image(result[0])
+        assert image.size == (600, 800), "方向没有烧进像素，照片会永久躺倒"
+        # 转完就不该再留方向标记了（留着的话某些查看器会**再转一次**）
+        assert image.getexif().get(0x0112) in (None, 1)
+
+    def test_non_portrait_photo_is_not_rotated(self):
+        """没有方向标记的图（或 Orientation=1）不能被无谓地转一下。
+
+        ★ 和上一条是一对：只测上一条的话，把 exif_transpose 换成
+          "无条件转 90°"也能绿。这条钉住"只转该转的"。
+        """
+        source = photo_with_gps_exif(width=800, height=600)
+
+        result = normalize_uploaded_photo(source)
+
+        assert result is not None
+        assert open_image(result[0]).size == (800, 600)
 
     def test_downscales_long_edge(self):
         """4000px 的手机照片要缩到 MAX_UPLOAD_EDGE，否则白占磁盘和流量。"""
