@@ -156,6 +156,51 @@ export const http: AxiosInstance = axios.create({
   },
 })
 
+/**
+ * 上传文件（multipart）时必须带上的请求头覆盖。
+ *
+ * ★★★ 不加这个，上传会**静默失败**，而且看起来完全不像 Content-Type 的问题：
+ *
+ *   上面那个 `'Content-Type': 'application/json'` 是实例级默认值，
+ *   axios 的 transformRequest 见到 json 就会把请求体 JSON.stringify 一遍
+ *   （见 axios 的 `hasJSONContentType ? JSON.stringify(formDataToJSON(data)) : data`）。
+ *   于是 FormData 被序列化成 `{"caption":"x","file":{}}` ——
+ *   **文件本身一个字节都没发出去**，后端只会说"没有收到图片文件"。
+ *   实测过，就是上面这个结果。
+ *
+ * ★ 那写成 'multipart/form-data' 呢？**在 Chrome 上能work**，但这个写法
+ *   建立在一个"浏览器会覆盖你手写的头"的行为上，不值得赌：
+ *   boundary（各个部分的随机分隔符）是**浏览器自己生成**的，
+ *   手写一个 multipart/form-data 等于抢在浏览器前面把这个头定死了，
+ *   而 axios 交给浏览器时那个头的值里**是没有 boundary 的**
+ *   （实测 axios 侧解析出来的就是 `multipart/form-data` 这九个字）。
+ *   现代 Chrome 会认出"这是个 FormData，我重写这个头"并补上 boundary
+ *   （实测拿到 `multipart/form-data; boundary=----WebKitFormBoundary…`），
+ *   但这是在依赖某个具体实现的宽容，而不是规范给的保证 ——
+ *   老一点的 WebView / 别的引擎上，报错会是一句"服务端解析不出请求"，
+ *   和 Content-Type 看起来毫无关系。
+ *
+ * ★ 所以真正稳妥的做法是**把这个头彻底去掉**（值写 `false`），让浏览器从零自己填。
+ *   这条路上没有任何"浏览器要不要覆盖"的余地 ——
+ *   请求头里根本没有 Content-Type，浏览器**必须**按规范给 FormData
+ *   生成一个带 boundary 的完整 multipart 头，这一点所有引擎一致。
+ *   axios 的 AxiosHeaders 对 `false` 有特殊处理 —— 它不只是"值为假"，
+ *   而是把这个头**锁住**（`self[key] !== false` 时才会被后续赋值覆盖），
+ *   所以实例默认值不会再把它加回来。
+ *
+ * ★ 三组写法都是在**真的 headless Chrome + 真的 axios 1.20** 上跑过的，
+ *   服务端看到的结果分别是：
+ *     不覆盖（实例默认 application/json）→ 请求体只有 30 字节的
+ *        `{"caption":"…","file":{}}`，**文件一个字节都没发出去**
+ *       'multipart/form-data'          → 文件完整，boundary 由浏览器补上
+ *       false（本常量）                 → 文件完整，boundary 由浏览器补上
+ *   第一种是真正会让人查半天的那个坑：请求成功、状态码 200、
+ *   后端只会说一句"没有收到图片文件"。
+ *
+ * ★ 只有 multipart 请求需要它；普通 JSON 请求照旧走实例默认值。
+ */
+export const MULTIPART_HEADERS = { 'Content-Type': false } as const
+
 /* ------------------------- 请求拦截器 ------------------------- */
 
 http.interceptors.request.use(

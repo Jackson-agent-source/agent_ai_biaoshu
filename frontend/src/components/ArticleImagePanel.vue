@@ -3,18 +3,24 @@
  * 配图面板：文章详情页右侧「配图」tab 的内容。
  *
  * 布局分三块：
- *   1. 操作条 —— 一键生成剩余的配图建议 / 停止 / 进度
+ *   1. 操作条 —— 一键生成剩余的配图建议 / 上传实拍图 / 停止 / 进度
  *   2. 配图建议列表 —— 每条一个「生成」按钮（已经出过图的显示「已生成」）
- *   3. 已生成的图 —— 缩略图 + 图注 + 插入位置 + 设封面 + 删除
+ *   3. 已有的图 —— 缩略图 + 图注 + 插入位置 + 设封面 + 删除
+ *      （AI 生成的和用户自己上传的**混在同一个列表里**，
+ *        靠状态标签区分：上传的显示「实拍图」而不是「已生成」）
  *
  * ★ 数据全部走 stores/image.ts，组件自己不持有列表。
  *   这样"能不能推送到公众号"的判断（要求至少一张成功配图）
  *   和这里显示的图是**同一份状态**，不会出现一个说有一张、另一个说没有。
+ *
+ * ★ 上传和生成是**两个入口、同一条下游**：传上来的照片和生成的插画
+ *   在数据上是同一种东西，图注 / 插入位置 / 设封面 / 删除这些操作
+ *   两边的图共用同一套按钮，不需要写两份。
  */
 
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Picture } from '@element-plus/icons-vue'
+import { Picture, Upload } from '@element-plus/icons-vue'
 
 import { ApiError } from '@/api/http'
 import { useImageStore } from '@/stores/image'
@@ -66,6 +72,60 @@ const anchorOptions = computed(() => {
 /** 统一的错误提示 */
 function showError(error: unknown, fallback: string): void {
   ElMessage.error(error instanceof ApiError ? error.message : fallback)
+}
+
+/**
+ * 有活儿在干（生成中或上传中）。
+ *
+ * ★ 界面上的按钮禁用它，而不是分别写 `generating || uploading`：
+ *   漏掉一处就是一个"上传时还能点生成"的洞，而这类洞不会报错，
+ *   只会让两件事同时跑，把进度条和提示搅在一起。
+ */
+const busy = computed(() => imageStore.generating || imageStore.uploading)
+
+/** 隐藏的文件选择框（「上传实拍图」按钮代它被点击） */
+const fileInput = ref<HTMLInputElement | null>(null)
+
+/** 用户选完照片 */
+async function handleFilesPicked(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files ?? [])
+
+  // ★★ 必须立刻清空 input.value，否则**同一张照片选第二次不会触发 change**
+  //    （浏览器认为值没变），用户会以为点击没反应 —— 而这是最自然的操作：
+  //    传错了 → 删掉 → 再选同一张传一次。
+  //    放在这里（读走 files 之后立刻清）而不是等上传完，是为了不让
+  //    input 一直捏着 File 对象不放。
+  input.value = ''
+
+  if (files.length === 0) {
+    return
+  }
+
+  const succeeded = await imageStore.uploadBatch(props.article.id, files)
+
+  if (succeeded > 0) {
+    ElMessage.success(`已上传 ${succeeded} 张实拍图`)
+  }
+  if (imageStore.errorMessage) {
+    // 部分成功时这句会跟在成功提示后面，把"哪几张没上去"说清楚
+    ElMessage.warning(`有实拍图没能上传：${imageStore.errorMessage}`)
+  }
+}
+
+/**
+ * 图片行上那个状态标签显示什么。
+ *
+ * ★ 上传的图**不能**显示"已生成" —— 它不是生成的。用户自己传的照片
+ *   底下写"已生成"，会让人怀疑是不是系统又背着他生成了一张。
+ *   这里直接换成「实拍图」，同时也就把"这张是我自己传的"这件事说清楚了，
+ *   不用再加第二个标签。
+ *
+ * ★ 上传不可能有其它状态：后端收到图就是成功态（没有中间过程），
+ *   所以这里不需要考虑"上传失败"的标签 —— 失败根本不会产生记录。
+ */
+function statusLabel(image: GeneratedImage): string {
+  return image.source === 'upload' ? '实拍图' : image.status_display
 }
 
 /** 生成单张 */
@@ -178,15 +238,52 @@ async function handleRefresh(): Promise<void> {
         type="primary"
         size="small"
         :loading="imageStore.generating"
-        :disabled="pendingCount === 0"
+        :disabled="busy || pendingCount === 0"
         @click="handleGenerateAll"
       >
         {{ pendingCount > 0 ? `生成剩余 ${pendingCount} 张` : '全部建议已出图' }}
       </el-button>
-      <el-button v-if="imageStore.generating" size="small" plain @click="imageStore.stopBatch()">
+
+      <!--
+        上传实拍图。
+
+        ★ 用原生 <input type="file"> 而不是 el-upload：el-upload 自己维护一份
+          fileList（有自己的上传队列、自己的状态机），而这里的图**只有一个权威来源**
+          —— stores/image.ts 里的列表。两套状态并存的话，就会出现
+          "el-upload 以为传完了、列表里还没出现"这种要对着两处看的问题。
+          我们要的只是"选文件"这一个动作，原生 input 就够，而且行为完全可预期。
+
+        ★ accept 只是给文件选择器一个默认筛选，**不是校验**：
+          用户仍然可以切到"所有文件"选一个 .txt。真正的校验在服务端
+          （它只看字节，不看扩展名和 Content-Type）。
+      -->
+      <el-tooltip
+        content="传自己的照片。默认插在文章开头，可在下方改「插入位置」"
+        placement="top"
+      >
+        <el-button
+          size="small"
+          :icon="Upload"
+          :loading="imageStore.uploading"
+          :disabled="busy"
+          @click="fileInput?.click()"
+        >
+          上传实拍图
+        </el-button>
+      </el-tooltip>
+      <input
+        ref="fileInput"
+        class="hidden-file-input"
+        type="file"
+        accept="image/*"
+        multiple
+        @change="handleFilesPicked"
+      />
+
+      <el-button v-if="busy" size="small" plain @click="imageStore.stopBatch()">
         停止
       </el-button>
-      <el-button size="small" text :disabled="imageStore.generating" @click="handleRefresh">
+      <el-button size="small" text :disabled="busy" @click="handleRefresh">
         刷新
       </el-button>
     </div>
@@ -196,6 +293,12 @@ async function handleRefresh(): Promise<void> {
       <el-icon class="is-loading"><Picture /></el-icon>
       正在生成第 {{ imageStore.progress.currentIndex + 1 }} 条建议的配图…
       （已完成 {{ imageStore.progress.done }}/{{ imageStore.progress.total }} 张）
+    </div>
+
+    <!-- 上传的进度。同样要有：一次选十张照片，没有进度看起来就像没反应 -->
+    <div v-if="imageStore.uploading" class="progress-line">
+      <el-icon class="is-loading"><Upload /></el-icon>
+      正在上传第 {{ imageStore.progress.done + 1 }}/{{ imageStore.progress.total }} 张实拍图…
     </div>
 
     <el-alert
@@ -223,7 +326,7 @@ async function handleRefresh(): Promise<void> {
           size="small"
           :type="usedIndexes.has(index) ? 'info' : 'primary'"
           plain
-          :disabled="imageStore.generating || usedIndexes.has(index)"
+          :disabled="busy || usedIndexes.has(index)"
           @click="handleGenerateOne(index, text)"
         >
           {{ usedIndexes.has(index) ? '已生成' : '生成' }}
@@ -240,7 +343,7 @@ async function handleRefresh(): Promise<void> {
 
     <el-empty
       v-if="imageStore.images.length === 0"
-      description="还没有配图"
+      description="还没有配图，可以生成一张，也可以上传自己的实拍图"
       :image-size="60"
     />
 
@@ -263,7 +366,7 @@ async function handleRefresh(): Promise<void> {
       <div class="image-body">
         <div class="image-meta">
           <el-tag size="small" :type="IMAGE_STATUS_TAG_TYPES[image.status]">
-            {{ image.status_display }}
+            {{ statusLabel(image) }}
           </el-tag>
           <el-tag v-if="image.is_cover" size="small" type="warning">封面</el-tag>
           <span v-if="image.width && image.height" class="dim">
@@ -334,6 +437,16 @@ async function handleRefresh(): Promise<void> {
   font-size: 12px;
   color: #409eff;
   line-height: 1.6;
+}
+
+/*
+ * 隐藏的文件选择框。
+ * ★ 用 display: none（而不是透明度/绝对定位挪出屏幕）：它本来就只被
+ *   按钮代着点，不需要参与布局，更不需要能被聚焦到。
+ *   （.click() 对 display:none 的 input 依然有效，这是浏览器允许的。）
+ */
+.hidden-file-input {
+  display: none;
 }
 
 .panel-alert {
