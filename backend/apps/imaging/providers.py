@@ -303,7 +303,10 @@ class OpenAICompatibleImageProvider:
                 error="image_provider_rate_limited",
                 message="生图服务请求过于频繁或额度不足（HTTP 429），请稍后再试。",
             )
-        if response.status_code in (400, 404):
+        # ★ 403 也要走 body 翻译。中转站习惯把"上游欠费"「分组无权限」这类
+        #   业务错误塞在 403 里返回，只认 400/404 的话，detail 明明已经解析出来了
+        #   却会被丢掉，用户最后只看到一句没有信息量的"HTTP 403"。
+        if response.status_code in (400, 403, 404):
             return self._translate_body_error({"code": code, "message": detail})
 
         return ImageGenerationResult(
@@ -335,9 +338,21 @@ class OpenAICompatibleImageProvider:
                 ),
             )
         if "insufficient" in low or "quota" in low or "balance" in low or "credit" in low:
+            # ★ 这句"余额不足"不一定是在说你。中转站普遍是二层转售：它自己接
+            #   OpenAI 的那条上游线路欠费时，也会把上游的原话原样转给用户，
+            #   看起来和"你欠费了"一模一样。所以必须把原话带出来，并点明
+            #   "你余额正常的话这就是中转站的问题，改配置没用"——
+            #   否则用户会一直去后台充钱、反复检查 Key，永远查不到真正的原因。
             return ImageGenerationResult(
                 error="image_provider_quota_exceeded",
-                message="生图服务的余额或额度不足，请去中转站后台充值后重试。",
+                message=(
+                    f"生图服务返回额度不足：{detail or '未提供原因'}。"
+                    "请先确认你自己在中转站的余额、以及这个 Key 的额度——"
+                    "确实不足的话，充值后重试。"
+                    "如果你那边余额正常，那这句话多半是中转站转述它**上游渠道**的报错"
+                    "（它自己接 OpenAI 的账户欠费了）——这种情况改本项目的任何配置都没用，"
+                    "只能把上面这句原文发给中转站客服。"
+                ),
             )
         if "content" in low and ("policy" in low or "safety" in low or "rejected" in low):
             # 图片模型的审核比文本模型严得多，这条会真的遇到

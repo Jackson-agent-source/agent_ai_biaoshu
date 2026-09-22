@@ -520,20 +520,33 @@ IMAGE_MODEL = env_str("IMAGE_MODEL", "")
 
 # 单张图的超时（秒）。生图本身就要 30~90 秒，往小调必然失败。
 IMAGE_TIMEOUT = env_int("IMAGE_TIMEOUT", 300)
-# 出图尺寸。竖版 1024x1536 更适合公众号正文的阅读流。
+# 出图尺寸。横版 1536x1024 —— 和下面 IMAGE_STYLE_PROMPT 里那句"构图为横版"
+# 必须保持一致：提示词要横版、尺寸给竖版的话，模型收到的是自相矛盾的指令，
+# 出图会不稳定（同一段提示词时而横时而竖）。
 # ★ 封面不依赖这个值 —— image_utils.make_wechat_thumb() 自己裁 900x500。
-IMAGE_SIZE = env_str("IMAGE_SIZE", "1024x1536")
+IMAGE_SIZE = env_str("IMAGE_SIZE", "1536x1024")
 # quality / output_format 只有 gpt-image-* 系列认，老模型带了会直接 400，
 # providers.py 会先判断模型名再决定带不带，这里照填即可。
 IMAGE_QUALITY = env_str("IMAGE_QUALITY", "medium")
 IMAGE_OUTPUT_FORMAT = env_str("IMAGE_OUTPUT_FORMAT", "jpeg")
-# 画风前缀，会拼在每条配图建议前面。
-# ★ 默认值里那句"不要出现任何文字"是必须的：
+# 画风前缀，会拼在每条配图建议前面（拼装逻辑见 imaging/services.py:build_prompt）。
+# ★ 默认值里那句"不要出现可读文字"是必须的：
 #   生图模型画的中文字几乎全是错的，配图里出现一串乱码字母比没图还难看。
+# ★ 这段和 IMAGE_SIZE 是绑死的：它要求横版构图，IMAGE_SIZE 就必须是横向的。
+#   改这里的话记得一起看上面那行。
+# ★ 想临时换画风不用改这个文件 —— 在 .env 里设 IMAGE_STYLE_PROMPT 即可覆盖。
 IMAGE_STYLE_PROMPT = env_str(
     "IMAGE_STYLE_PROMPT",
-    "简洁现代的扁平化插画风格，柔和的低饱和配色，画面干净，"
-    "不要出现任何文字、字母、数字或水印。",
+    """用途：微信公众号深度科技文章横版插图。
+
+统一视觉风格：
+高级科技杂志编辑插画，半写实3D，电影级光影。
+黑色、午夜蓝和深灰为主要背景色，青绿色为科技主光，
+少量红橙色用于表达风险。
+
+构图为横版，视觉中心明确，手机端缩小后仍能看懂。
+不要出现可读文字、乱码、品牌Logo、水印和真实软件界面。
+不要出现戴兜帽的黑客，不要做成廉价赛博朋克风格。""",
 )
 # 单篇文章的配图上限。这不是防烧钱（那是下面两个每日额度的事），
 # 是防止一篇文章被塞进几十张图 —— 正文图太多公众号里很难读。
