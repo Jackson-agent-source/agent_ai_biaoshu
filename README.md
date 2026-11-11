@@ -2285,6 +2285,24 @@ A：因为这篇文章还没有配图。**公众号的草稿必须有封面图**
 - HTML / 富文本保留视觉样式；MD 高亮用 `==文字==`，需目标编辑器支持。现有文章的排版副本不会回写文章数据库。
 - 验证：`cd frontend; npm run test:documents`；后端运行 `python -m pytest apps/agent/tests/test_layout.py`。
 
+### 无宝塔的独立服务器部署
+
+当宿主机的 80/443 端口空闲时，可以叠加 `compose.standalone.yml`。它以 Caddy 作为 HTTPS 入口，并将后端降为 1 个进程、2 个线程；原有宝塔部署命令保持不变。
+
+先将站点域名的 A 记录指向服务器，在云安全组和宿主机防火墙允许 TCP 80/443。根目录 `.env` 的 `SITE_ORIGIN` 填 `https://你的域名`（不带路径或末尾斜线），同时填写 `ALLOWED_HOSTS`、`CSRF_TRUSTED_ORIGINS`、`MEDIA_PUBLIC_BASE_URL`，保持 `USE_HTTPS=True`、`WEB_BIND=127.0.0.1`。不要将数据库或应用内部端口映射到公网。
+
+2GB 内存机器建议先配置 Swap，顺序构建，避免构建期间内存不足：
+
+```bash
+docker compose -f docker-compose.yml -f compose.standalone.yml config --quiet
+docker compose --parallel 1 -f docker-compose.yml -f compose.standalone.yml build
+docker compose -f docker-compose.yml -f compose.standalone.yml up -d
+docker compose -f docker-compose.yml -f compose.standalone.yml ps
+docker compose -f docker-compose.yml -f compose.standalone.yml exec backend python manage.py createsuperuser
+```
+
+更新和停止时也使用相同的两个 `-f` 参数。不要执行 `down -v`，数据库、图片以及 `caddy_data` 中的证书都需要持久保存。首次启动时检查 `https` 服务日志与域名的 `/health/` 响应；DNS 尚未生效或 80/443 不通时，证书申请不能完成。
+
 ### 个人 API 配置
 
 登录后进入「设置」，可分别填写文字模型和图片模型的 HTTPS 基地址、模型名称及 API Key，支持 OpenAI 兼容接口。

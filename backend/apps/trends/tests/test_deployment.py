@@ -12,9 +12,10 @@ BACKEND = Path(__file__).resolve().parents[3]
 ROOT = BACKEND.parent
 
 
+@pytest.mark.parametrize("workers, threads", [("1", "2"), ("3", "4")])
 @pytest.mark.parametrize("api_key", [None, "", "test-default-key"])
 @pytest.mark.parametrize("secret, expected", [("test-deployment-secret", 0), ("change-me-to-a-random-string", 1)])
-def test_web_startup_allows_personal_api_setup_but_requires_secure_secret(tmp_path, api_key, secret, expected):
+def test_web_startup_allows_personal_api_setup_but_requires_secure_secret(tmp_path, api_key, secret, expected, workers, threads):
     bash = r"C:\Program Files\Git\bin\bash.exe" if os.name == "nt" else shutil.which("bash")
     if not bash or not Path(bash).exists():
         pytest.skip("POSIX shell unavailable")
@@ -26,6 +27,7 @@ exec() { printf 'exec %s\n' "$*" >> "$RUN_LOG"; }
 . "$0"
 '''
     env = {**os.environ, "DJANGO_SECRET_KEY": secret, "DEBUG": "False",
+           "GUNICORN_WORKERS": workers, "GUNICORN_THREADS": threads,
            "RUN_LOG": (tmp_path / "startup").as_posix()}
     env.pop("LLM_API_KEY", None)
     if api_key is not None:
@@ -39,6 +41,7 @@ exec() { printf 'exec %s\n' "$*" >> "$RUN_LOG"; }
         assert "python manage.py migrate --noinput" in commands
         assert "python manage.py collectstatic --noinput" in commands
         assert "exec gunicorn config.wsgi:application" in commands
+        assert f"--workers {workers} --threads {threads}" in commands
     else:
         assert not log.exists()
 
@@ -55,6 +58,19 @@ def test_compose_scheduler_uses_backend_database_and_media():
     assert "uploads:/app/media" in backend["volumes"]
     assert "uploads:/app/media" in scheduler["volumes"]
     assert scheduler["healthcheck"]["disable"] is True
+
+
+def test_standalone_https_preserves_internal_web_boundary_and_certificates():
+    base = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    overlay = yaml.safe_load((ROOT / "compose.standalone.yml").read_text(encoding="utf-8"))
+    assert "web" not in overlay["services"]
+    assert base["services"]["web"]["ports"] == ["${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:80"]
+    https = overlay["services"]["https"]
+    assert https["ports"] == ["80:80", "443:443"]
+    assert "caddy_data:/data" in https["volumes"]
+    assert "caddy_config:/config" in https["volumes"]
+    assert "reverse_proxy web:80" in (ROOT / "deploy/Caddyfile").read_text()
+    assert "tls_insecure_skip_verify" not in (ROOT / "deploy/Caddyfile").read_text()
 
 
 @pytest.mark.parametrize("interval, expected", [("1", "900"), ("invalid", "21600"), ("3600", "3600")])

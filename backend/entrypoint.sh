@@ -127,7 +127,7 @@ echo "==> [6/6] 启动 gunicorn"
 # ★ 3 workers × 4 threads = 12 并发上限。
 #   这同时是"最多 12 个 Agent 同时在跑"的天然闸门 —— 这是好事，不是限制。
 #   2 核 4G 的机器上这个配置很舒服（约 1.2GB 后端 + 400MB MySQL）。
-#   如果机器只有 2G 内存，把 --workers 改成 2。
+#   可通过 GUNICORN_WORKERS / GUNICORN_THREADS 调整；独立小内存部署覆盖为 1×2。
 #
 # ★ 将来如果要把 backend 扩成 2 个副本：
 #   必须把上面 migrate 那一步拆成一个独立的 one-shot 服务
@@ -137,8 +137,8 @@ echo "==> [6/6] 启动 gunicorn"
 exec gunicorn config.wsgi:application \
     --bind 0.0.0.0:8000 \
     --worker-class gthread \
-    --workers 3 \
-    --threads 4 \
+    --workers "${GUNICORN_WORKERS:-3}" \
+    --threads "${GUNICORN_THREADS:-4}" \
     --timeout 120 \
     --graceful-timeout 30 \
     --keep-alive 5 \

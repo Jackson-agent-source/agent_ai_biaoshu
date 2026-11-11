@@ -1,0 +1,5 @@
+# SITE_ORIGIN must be https://your-domain, with no path or trailing slash.
+# Caddy manages certificates and replaces forwarded headers at the public edge.
+{$SITE_ORIGIN} {
+    reverse_proxy web:80
+}

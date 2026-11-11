@@ -1,0 +1,32 @@
+# 无宝塔、80/443 空闲的服务器使用；与 docker-compose.yml 合并。
+# docker compose -f docker-compose.yml -f compose.standalone.yml up -d
+services:
+  backend:
+    environment:
+      GUNICORN_WORKERS: "1"
+      GUNICORN_THREADS: "2"
+
+  https:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      SITE_ORIGIN: ${SITE_ORIGIN:?Set SITE_ORIGIN to your https domain in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy_data:
+  caddy_config:
