@@ -27,7 +27,7 @@ from apps.common.markdown_sections import section_titles
 from apps.common.utils import truncate
 from apps.imaging import image_utils
 from apps.imaging.models import GeneratedImage
-from apps.imaging.providers import get_image_provider
+from apps.imaging.providers import get_image_provider, get_image_model_name
 
 logger = logging.getLogger(__name__)
 
@@ -250,7 +250,7 @@ def generate_image(
             article=article, suggestion=suggestion, index=suggestion_index
         )
 
-    provider = get_image_provider()
+    provider = get_image_provider(user=user)
 
     record = GeneratedImage.objects.create(
         article=article,
@@ -262,7 +262,7 @@ def generate_image(
         caption=truncate(caption, 200, ""),
         status=GeneratedImage.Status.RUNNING,
         provider=provider.name,
-        model_name=getattr(settings, "IMAGE_MODEL", "") or "",
+        model_name=get_image_model_name(user=user) or "",
         sort_order=article.images.count(),
     )
 

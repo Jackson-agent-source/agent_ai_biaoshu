@@ -49,6 +49,18 @@ LLM_BASE_URL = ""
 SEARCH_PROVIDER = "tavily"
 SEARCH_API_KEY = "test-search-key-not-real"
 
+# 热点平台一律不使用开发者本机的真实密钥。相关测试使用 MockTransport。
+TREND_YOUTUBE_API_KEY = ""
+TREND_GITHUB_TOKEN = ""
+TREND_GITEE_TOKEN = ""
+TREND_X_BEARER_TOKEN = ""
+TREND_DOUYIN_CLIENT_KEY = ""
+TREND_DOUYIN_CLIENT_SECRET = ""
+TREND_AUTO_GENERATE = False
+TREND_USER_ID = 0
+TREND_USERNAMES = []
+TREND_KEYWORDS = []
+
 # ---- 媒体文件：绝对不要写进真实的 backend/media/ ----
 # settings.py 里 MEDIA_ROOT = BASE_DIR / "media"，而生成配图的测试会**真的写文件**。
 # 不覆盖的话，跑一次 pytest 就会在你本地的 backend/media/ 里留下一堆测试图，

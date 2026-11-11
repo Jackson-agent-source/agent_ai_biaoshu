@@ -7,7 +7,7 @@
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Document, EditPen, Files, Setting, SwitchButton } from '@element-plus/icons-vue'
+import { Document, EditPen, Files, Setting, SwitchButton, TrendCharts } from '@element-plus/icons-vue'
 
 import { useAuthStore } from '@/stores/auth'
 
@@ -63,6 +63,10 @@ async function handleLogout(): Promise<void> {
           <el-icon><EditPen /></el-icon>
           <span>创建文章</span>
         </el-menu-item>
+        <el-menu-item index="/trends">
+          <el-icon><TrendCharts /></el-icon>
+          <span>热点选题</span>
+        </el-menu-item>
         <el-menu-item index="/articles">
           <el-icon><Files /></el-icon>
           <span>文章历史</span>
@@ -70,6 +74,10 @@ async function handleLogout(): Promise<void> {
         <el-menu-item index="/settings">
           <el-icon><Setting /></el-icon>
           <span>设置</span>
+        </el-menu-item>
+        <el-menu-item index="/markdown">
+          <el-icon><EditPen /></el-icon>
+          <span>Markdown 排版</span>
         </el-menu-item>
       </el-menu>
     </el-aside>

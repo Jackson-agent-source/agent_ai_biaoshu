@@ -91,6 +91,11 @@ services:
     #   而且排查时会先看错的那一份。
     env_file:
       - .env
+    # 容器间连接固定使用服务名，避免误用本地开发的 SQLite/127.0.0.1。
+    environment: &backend_database
+      DB_ENGINE: mysql
+      DB_HOST: db
+      DB_PORT: "3306"
 
     depends_on:
       db:
@@ -117,6 +122,28 @@ services:
     expose:
       - "8000"
 
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # 独立单实例调度器；不占用 Web worker，也不会因 gunicorn 多进程重复执行。
+  trend_scheduler:
+    build:
+      context: ./backend
+    entrypoint: ["/bin/sh", "/app/trend_scheduler.sh"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment: *backend_database
+    volumes:
+      - uploads:/app/media
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      disable: true
     logging:
       driver: json-file
       options:

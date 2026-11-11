@@ -223,6 +223,7 @@ INSTALLED_APPS = [
     "apps.accounts",
     "apps.conversations",
     "apps.agent",
+    "apps.trends",
     "apps.articles",
     "apps.imaging",  # AI 配图（文生图）
     "apps.wechat",  # 微信公众号草稿箱
@@ -416,9 +417,11 @@ REST_FRAMEWORK = {
     #   频率完全正常，只有总量账本挡得住。
     "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.ScopedRateThrottle"],
     "DEFAULT_THROTTLE_RATES": {
+        "connection_test": "10/hour",
         # 单用户提交生成的频率。别设太紧：Agent 一次要跑 30~120 秒，
         # 用户在等待期间刷新页面、点开历史列表都不该被误伤。
         "agent_generate": env_str("THROTTLE_GENERATE", "10/hour"),
+        "trend_refresh": env_str("THROTTLE_TREND_REFRESH", "3/hour"),
         # 登录接口，防撞库。按 IP + 用户名计数。
         "login": env_str("THROTTLE_LOGIN", "20/min"),
         # 推送公众号草稿箱：每次都要真的调微信（微信有 45009 调用量上限），
@@ -503,6 +506,24 @@ AGENT_LIMITS = {
 AGENT_DAILY_QUOTA_PER_USER = env_int("AGENT_DAILY_QUOTA_PER_USER", 0)
 AGENT_DAILY_QUOTA_GLOBAL = env_int("AGENT_DAILY_QUOTA_GLOBAL", 0)
 
+# 热点采集：Google RSS 无需密钥，其余平台按需开通。
+# 多用户部署用 TREND_USERNAMES 指定每个接收选题和草稿的账号。
+TREND_GOOGLE_GEO = env_str("TREND_GOOGLE_GEO", "US").upper()
+TREND_YOUTUBE_API_KEY = env_str("TREND_YOUTUBE_API_KEY", "")
+TREND_GITHUB_TOKEN = env_str("TREND_GITHUB_TOKEN", "")
+TREND_GITEE_TOKEN = env_str("TREND_GITEE_TOKEN", "")
+TREND_YOUTUBE_REGION = env_str("TREND_YOUTUBE_REGION", "US").upper()
+TREND_X_BEARER_TOKEN = env_str("TREND_X_BEARER_TOKEN", "")
+TREND_X_WOEID = env_int("TREND_X_WOEID", 1)
+TREND_DOUYIN_CLIENT_KEY = env_str("TREND_DOUYIN_CLIENT_KEY", "")
+TREND_DOUYIN_CLIENT_SECRET = env_str("TREND_DOUYIN_CLIENT_SECRET", "")
+TREND_KEYWORDS = [v.strip().casefold() for v in env_str("TREND_KEYWORDS", "").split(",") if v.strip()]
+TREND_AUTO_GENERATE = env_bool("TREND_AUTO_GENERATE", True)
+TREND_USER_ID = env_int("TREND_USER_ID", 0)
+TREND_USERNAMES = [v.strip() for v in env_str("TREND_USERNAMES", "").split(",") if v.strip()]
+TREND_DAILY_ARTICLE_LIMIT = max(0, env_int("TREND_DAILY_ARTICLE_LIMIT", 1))
+TREND_FETCH_TIMEOUT = max(3, min(env_int("TREND_FETCH_TIMEOUT", 15), 30))
+
 
 # ---------------------------------------------------------------------------
 # 配图（文生图）
@@ -515,6 +536,7 @@ AGENT_DAILY_QUOTA_GLOBAL = env_int("AGENT_DAILY_QUOTA_GLOBAL", 0)
 #   缺任何一项时 get_image_provider() 返回 NullImageProvider，
 #   生图接口会返回一句"缺哪几项"的中文提示，而不是一个 500。
 IMAGE_API_KEY = env_str("IMAGE_API_KEY", "")
+MODEL_CREDENTIAL_SECRET = env_str("MODEL_CREDENTIAL_SECRET", "")
 IMAGE_BASE_URL = env_str("IMAGE_BASE_URL", "")
 IMAGE_MODEL = env_str("IMAGE_MODEL", "")
 

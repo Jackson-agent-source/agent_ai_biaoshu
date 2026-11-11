@@ -3,10 +3,12 @@
 from django.urls import path
 
 from apps.agent import views
+from apps.agent.layout_views import ArticleLayoutView
 
 app_name = "agent"
 
 urlpatterns = [
+    path("layout", ArticleLayoutView.as_view(), name="article-layout"),
     # 创建 / 列出 Agent 运行
     path("runs", views.AgentRunListCreateView.as_view(), name="run-list-create"),
     # 单次运行的详情

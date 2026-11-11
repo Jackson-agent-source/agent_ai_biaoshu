@@ -40,7 +40,7 @@ export default defineConfig({
     //   只有图片是相对路径，所以只有它需要这一段。
     proxy: {
       '/media': {
-        target: 'http://localhost:8000',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },
     },

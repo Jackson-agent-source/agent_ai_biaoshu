@@ -102,3 +102,4 @@ Thumbs.db
 logs/
 scratch_*
 tmp_*
+/backend/_tmp_*

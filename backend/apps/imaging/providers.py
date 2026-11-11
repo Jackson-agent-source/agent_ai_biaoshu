@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -27,6 +28,8 @@ from urllib.parse import urlparse
 
 import httpx
 from django.conf import settings
+from apps.accounts.connections import personal_connection
+from apps.accounts.transport import public_client
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +134,7 @@ class OpenAICompatibleImageProvider:
         }
 
         try:
-            with httpx.Client(timeout=self.timeout) as client:
+            with self._client() as client:
                 response = client.post(
                     self.request_url, json=self._build_payload(prompt), headers=headers
                 )
@@ -168,6 +171,9 @@ class OpenAICompatibleImageProvider:
             )
 
         return self._extract_image(body)
+
+    def _client(self):
+        return httpx.Client(timeout=self.timeout)
 
     # ------------------------------------------------------------------
     # 取图：b64_json 优先，其次 url
@@ -396,8 +402,64 @@ class NullImageProvider:
         )
 
 
-def get_image_provider() -> ImageProvider:
+class PersonalImageProvider(OpenAICompatibleImageProvider):
+    """Personal endpoints and their returned image URLs are untrusted destinations."""
+    def _client(self):
+        return public_client(self.timeout)
+
+    def generate(self, prompt):
+        try:
+            with self._client() as client, client.stream('POST', self.request_url,
+                    json=self._build_payload(prompt), headers={'Authorization': f'Bearer {self.api_key}'}) as response:
+                response.raise_for_status()
+                chunks, size = [], 0
+                for chunk in response.iter_bytes():
+                    size += len(chunk)
+                    if size > MAX_DOWNLOAD_BYTES * 2:
+                        raise ValueError('Response too large')
+                    chunks.append(chunk)
+            body = json.loads(b''.join(chunks))
+            first = body.get('data', [])[0]
+            if not isinstance(first, dict) or not (first.get('b64_json') or first.get('url')):
+                raise ValueError('Missing image')
+            result = self._extract_image(body)
+        except Exception:
+            return ImageGenerationResult(error='image_provider_error', message='个人图片 API 调用失败，请检查设置中的连接信息。')
+        if not result.ok:
+            # Providers may echo request headers/keys in errors; never persist or expose them.
+            return ImageGenerationResult(error='image_provider_error', message='个人图片 API 未能生成图片，请核对密钥、模型权限、余额及接口地址。')
+        if len(result.data) > MAX_DOWNLOAD_BYTES:
+            return ImageGenerationResult(error='image_provider_bad_response', message='生成图片超过大小限制。')
+        result.revised_prompt = result.revised_prompt.replace(self.api_key, '[redacted]')
+        return result
+
+    def _download(self, url, revised):
+        try:
+            with self._client() as client, client.stream('GET', url) as response:
+                response.raise_for_status()
+                chunks, size = [], 0
+                for chunk in response.iter_bytes():
+                    size += len(chunk)
+                    if size > MAX_DOWNLOAD_BYTES:
+                        raise ValueError('Image too large')
+                    chunks.append(chunk)
+            return ImageGenerationResult(data=b''.join(chunks), revised_prompt=revised)
+        except Exception:
+            return ImageGenerationResult(error='image_provider_bad_response', message='图片地址不可用或不是允许的公网 HTTPS 地址。')
+
+
+def get_image_model_name(user=None):
+    connection = personal_connection(user, 'image', check_destination=False)
+    return connection.model_name if connection else settings.IMAGE_MODEL
+
+
+def get_image_provider(user=None) -> ImageProvider:
     """根据 .env 配置返回可用的生图 Provider。"""
+    connection = personal_connection(user, 'image')
+    if connection:
+        return PersonalImageProvider(api_key=connection.api_key, base_url=connection.base_url, model=connection.model_name,
+                                     timeout=settings.IMAGE_TIMEOUT, size=settings.IMAGE_SIZE,
+                                     quality=settings.IMAGE_QUALITY, output_format=settings.IMAGE_OUTPUT_FORMAT)
     api_key = (settings.IMAGE_API_KEY or "").strip()
     base_url = (settings.IMAGE_BASE_URL or "").strip()
     model = (settings.IMAGE_MODEL or "").strip()

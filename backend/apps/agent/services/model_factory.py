@@ -15,6 +15,9 @@
 from __future__ import annotations
 
 import logging
+import httpx
+from apps.accounts.connections import personal_connection
+from apps.accounts.transport import public_client, AsyncPublicTransport
 
 from django.conf import settings
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -28,25 +31,34 @@ logger = logging.getLogger(__name__)
 _OPENAI_COMPATIBLE_PROVIDERS = {"openai", "openai-compatible", "deepseek", "qwen", "moonshot", "zhipu", "ollama"}
 
 
-def get_model_name() -> str:
+def get_model_name(user=None) -> str:
     """返回当前配置的模型名，用于写进 AgentRun.model_name / Article.model_name。
 
     只返回模型名，绝不返回 Key。
     """
-    return settings.LLM_MODEL or "未配置"
+    connection = personal_connection(user, 'text', check_destination=False)
+    return connection.model_name if connection else settings.LLM_MODEL or "未配置"
 
 
-def is_model_configured() -> bool:
+def is_model_configured(user=None) -> bool:
     """检查模型是否已经配置好。
 
     没配置时，接口应该给用户一句清楚的中文提示，
     而不是抛一个看不懂的 OpenAI SDK 报错。
     """
-    return bool(settings.LLM_MODEL and settings.LLM_API_KEY)
+    return bool(personal_connection(user, 'text', check_destination=False) or (settings.LLM_MODEL and settings.LLM_API_KEY))
+
+
+def get_model_provider(user=None):
+    connection = personal_connection(user, 'text', check_destination=False)
+    if connection:
+        return 'deepseek' if 'deepseek' in connection.model_name.lower() else 'openai-compatible'
+    return settings.LLM_PROVIDER.strip().lower()
 
 
 def get_chat_model(
     *,
+    user=None,
     temperature: float | None = None,
     model_name: str | None = None,
     max_tokens: int | None = None,
@@ -64,6 +76,18 @@ def get_chat_model(
     异常：
         ModelProviderError —— 没有配置 Key 或模型名，或者 provider 不认识。
     """
+    connection = personal_connection(user, 'text')
+    if connection:
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            model=model_name or connection.model_name, api_key=connection.api_key, base_url=connection.base_url,
+            temperature=settings.LLM_TEMPERATURE if temperature is None else temperature,
+            timeout=settings.LLM_TIMEOUT, max_retries=settings.LLM_MAX_RETRIES,
+            http_client=public_client(settings.LLM_TIMEOUT),
+            http_async_client=httpx.AsyncClient(timeout=settings.LLM_TIMEOUT, follow_redirects=False,
+                                               trust_env=False, transport=AsyncPublicTransport()),
+            **({'max_tokens': max_tokens} if max_tokens else {}),
+        )
     provider = (settings.LLM_PROVIDER or "openai").strip().lower()
     resolved_model = model_name or settings.LLM_MODEL
     resolved_temperature = settings.LLM_TEMPERATURE if temperature is None else temperature

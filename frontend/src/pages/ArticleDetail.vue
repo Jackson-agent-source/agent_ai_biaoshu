@@ -331,6 +331,9 @@ watch(articleId, () => {
         <el-button v-if="article" :loading="copying" @click="handleCopy">
           复制到公众号
         </el-button>
+        <el-button v-if="article" @click="router.push({ name: 'markdown-layout', query: { article: article.id } })">
+          风格排版
+        </el-button>
 
         <!--
           推送到公众号草稿箱。

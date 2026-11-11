@@ -52,7 +52,9 @@ COPY . .
 #   卷的根目录归 root 且权限取决于默认值。显式建出来，
 #   让卷第一次创建时就有确定的属主（容器是 root 跑的，nginx 只读没问题）。
 RUN sed -i 's/\r$//' entrypoint.sh \
+    && sed -i 's/\r$//' trend_scheduler.sh \
     && chmod +x entrypoint.sh \
+    && chmod +x trend_scheduler.sh \
     && mkdir -p /app/staticfiles /app/media
 
 EXPOSE 8000

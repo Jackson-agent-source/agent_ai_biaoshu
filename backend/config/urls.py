@@ -67,6 +67,7 @@ urlpatterns = [
     path("health/", health_check, name="health-check"),
     path("api/v1/auth/", include("apps.accounts.urls")),
     path("api/v1/agent/", include("apps.agent.urls")),
+    path("api/v1/trends/", include("apps.trends.urls")),
     # ★ 这一行是故意加的，不是重复配置。
     #
     # 本项目的接口约定是"集合地址不带末尾斜杠"，和 agent 那边保持一致：

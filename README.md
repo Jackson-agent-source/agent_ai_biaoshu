@@ -33,6 +33,55 @@
 
 ## 一、这个项目能做什么
 
+### 自动发现热点并生成选题
+
+现在可以从左侧“热点选题”页采集 Google Trends、Hacker News、BBC 世界与科技、The Guardian 世界、GitHub、Gitee、YouTube、X、抖音的综合热点，并按科技、财经、体育、娱乐、社会、生活、其他分类浏览。每个账号还能在页面填写自己的关注词，默认是人工智能与大模型；系统会从 Google News 搜索近七天的专题资讯，放进“关注方向”。这类资讯是选题线索，不代表搜索量排名。分类依据标题规则，无法判断的归入“其他”，文章生成时仍会重新检索资料。
+
+个人研究目录包含 AI工具研究、AI落地企业、AI赋能行业、投资、美股、BTC、纳指、港卡八条主线，并提供 AI Agent、AI商业化与SaaS、算力与半导体、宏观与利率、稳定币与支付、跨境金融六个拓展方向。点击主题添加或移除后保存，也可填写自定义词，最多 16 个，支持逗号、换行和竖线分隔。不同账号的选择相互独立，不会自动覆盖既有偏好。
+
+每个方向分别展开中英文同义词搜索（例如港卡展开为香港银行开户、银行卡与账户），最多四路并发，每个方向最多取六条，轮询合并并去重。同一条资讯仅保存一次，保留首次命中的研究方向；部分方向连接失败时仍保存其他方向的结果，并在来源状态中提示。建立选题时优先给各个已采集方向保留一个席位，选题卡支持研究方向标签与筛选。AI选题侧重工具评测、企业成本与行业案例；金融方向侧重机制和证据，港卡条件与费用优先核对官方资料。
+
+页面可选择哪些类别允许定时生成草稿，默认只选择“关注方向”。生产部署中的 `trend_scheduler` 每 6 小时运行一次，每个接收账号每天最多自动生成 `TREND_DAILY_ARTICLE_LIMIT` 篇。多用户时设置 `TREND_USERNAMES`，综合热点采集一次后，分别采集各账号关注方向并建立选题。设 `TREND_AUTO_GENERATE=False` 可只采集和生成候选选题。草稿不会自动发布。
+
+配置放在部署根目录 `.env`（本地开发放 `backend/.env`）：
+
+```env
+TREND_USERNAMES=user1,user2
+TREND_USER_ID=0
+TREND_AUTO_GENERATE=True
+TREND_DAILY_ARTICLE_LIMIT=1
+TREND_KEYWORDS=AI,人工智能,科技
+TREND_GOOGLE_GEO=US
+TREND_GITHUB_TOKEN=
+TREND_GITEE_TOKEN=
+TREND_YOUTUBE_REGION=US
+TREND_YOUTUBE_API_KEY=
+TREND_X_WOEID=1
+TREND_X_BEARER_TOKEN=
+TREND_DOUYIN_CLIENT_KEY=
+TREND_DOUYIN_CLIENT_SECRET=
+```
+
+Google Trends、Google News、BBC、The Guardian 使用公开 RSS；Hacker News 使用官方 Firebase API。GitHub 搜索公开仓库可匿名访问，建议配置 `TREND_GITHUB_TOKEN` 提高额度。Gitee 搜索接口可选配 `TREND_GITEE_TOKEN`；接口不稳定时页面会显示失败。YouTube 需要 Data API Key；X 需要开发者应用的 Bearer Token；抖音除应用 Key/Secret 外，还要申请 `hotsearch` 权限。新闻与社区只保存标题、链接等元数据；文章生成时仍需独立研究。未配置或请求失败的平台会显示状态。地区代码按目标读者调整。
+
+另外接入 arXiv 的人工智能论文 RSS 与 36氪官方公布的 RSS。实测 arXiv 可采集；36氪当前对本机返回 HTML，页面会显示解析失败。新闻、论文、论坛与代码仓库仅提供选题线索，不能当作已核实的事实或直接复制正文。需要扩展其他媒体时，在 `apps/trends/providers.py` 增加官方来源及其名称，再通过平台级失败状态检查可用性。
+
+在 `backend/` 下可手动运行：
+
+```bash
+python manage.py run_trend_pipeline --user-id 1
+python manage.py run_trend_pipeline --collect-only
+python manage.py collect_trends --platform google
+python manage.py build_topics --user-id 1
+python manage.py generate_trend_articles --user-id 1 --limit 1
+```
+
+定时调度由 Docker Compose 的 `trend_scheduler` 单实例服务运行，不需要在 Gunicorn 进程里加定时器。本地开发可以用操作系统任务计划定时运行上述命令。选题经过去重，已生成的同一热点在 7 天内不会再次自动推荐。
+
+Compose 中 `backend` 和 `trend_scheduler` 读取同一份根目录 `.env`，并固定以 `mysql`、`db:3306` 连接数据库；它们也共享 `uploads` 媒体卷。调度器等待后端健康（迁移完成）后立即执行首轮，之后每轮完成再等待 `TREND_INTERVAL_SECONDS` 秒，默认 21600、最小 900。请保持一个调度器实例。未建账号或配置的账号无效时，公共热点仍会保存，日志会提示如何设置接收账号。
+
+部署后用 `docker compose logs --tail=100 trend_scheduler` 检查各来源、候选和草稿数量；可用 `docker compose exec backend python manage.py run_trend_pipeline --collect-only` 单独检查采集。命令失败会保留错误日志并在下轮重新运行；失败选题也可在后续轮次重试，仍受每日草稿上限及 Agent 额度约束。每日统计按上海时间的时间范围查询，无需额外导入 MySQL 时区表。
+
 | 能力 | 说明 |
 | --- | --- |
 | 自主研究 | Agent 自己决定搜索什么、搜几次、读哪个页面，不需要你写流程 |
@@ -260,6 +309,27 @@ agent_ai_biaoshu/
 ---
 
 ## 五、快速开始
+
+### Windows 本地使用（无需云服务器）
+
+持续追踪个人热点时，另开一个 PowerShell 窗口运行 `./run-local.ps1 tracking -UserId 4`（4 是此电脑 hejie 的账号 ID，其他账号请替换）。默认首次立即采集，之后每轮完成再等待一小时；可用 `-IntervalSeconds 1800` 改为半小时，最小十五分钟。它仅采集已保存的研究方向并更新候选选题，不自动生成文章；选题优化仍使用已配置模型。保持电脑、网络和该进程运行，Ctrl+C 停止，重启电脑后需重新启动。
+
+页面每分钟读取最新结果，并显示进程心跳、最近成功及下次采集时间；缺失或超过三分钟的心跳不会显示正在运行。同一账号的重复追踪进程会被互斥锁阻止。连接失败会保留失败状态并在下一轮重试，不会把旧资讯当成本轮成功结果。本地运行状态写入被 Git 忽略的 `backend/logs/`。
+
+目录新增 Web3（以太坊/L2、DeFi、RWA、稳定币与监管）和 AI出海（海外增长、定价、本地化与案例）主题，可与美股等原有研究方向一起独立检索。`run_trend_pipeline --focus-only --no-generate --user-id 4` 也可执行一次不出稿的研究采集流程。
+
+已有 `backend/.env`、Python 虚拟环境和前端依赖时，在项目根目录打开两个 PowerShell 窗口，分别执行：
+
+```powershell
+.\run-local.ps1 backend
+.\run-local.ps1 frontend
+```
+
+打开 `http://127.0.0.1:5173`，用本地数据库里的原账号登录。后端监听 `127.0.0.1:8000`，使用 `backend/.env` 的真实 DeepSeek 与搜索配置；本地数据库设置 `DB_ENGINE=sqlite` 即可，不需要启动 MySQL 或 Docker。脚本不会启动 `demo_trends.py`，也不会自动启动定时出稿；两个窗口按 Ctrl+C 可停止服务。DeepSeek 和搜索仍需联网，并按各自 API 额度计费。
+
+如需手动采集并执行选题流水线，在第三个窗口执行 `backend\.venv\Scripts\python.exe backend\manage.py run_trend_pipeline --user-id <本地用户ID>`。该命令受 `TREND_AUTO_GENERATE`、类别偏好和每日上限约束。定时采集只会在电脑开机且任务运行时执行，可用 Windows 任务计划调用该命令。
+
+如果代理采用 Fake-IP DNS，网页域名可能被解析为 `198.18.x.x`，此时正文抓取会被 URL 安全校验拒绝。可在代理配置中将需要读取的网站改用真实 DNS 解析，保持 URL 安全校验开启；搜索与草稿生成仍可使用搜索摘要，但需复核文章的来源和风险提示。
 
 ### 0. 先确认环境
 
@@ -697,6 +767,10 @@ SEARCH_BASE_URL=                # ★ 一定要清空这行
 | GET | `/agent/runs/{run_id}/sources` | 这次检索到的所有来源 |
 | GET | `/agent/conversations` | 我的会话列表 |
 | GET | `/agent/conversations/{id}/messages` | 会话里的消息 |
+| GET | `/trends/overview` | 我的分类选题、来源状态和关注方向设置 |
+| POST | `/trends/refresh` | 更新综合热点及我的关注方向，建立候选选题 |
+| PUT | `/trends/preferences` | 设置关注词与允许定时出稿的分类 |
+| POST | `/trends/topics/{id}/generate` | 从我的候选选题生成站内文章草稿 |
 | GET | `/articles` | 文章列表（支持 `?status=` `?keyword=` `?page=`） |
 | GET | `/articles/stats/` | 首页统计 |
 | GET | `/articles/{id}` | 文章详情 |
@@ -2198,3 +2272,28 @@ A：因为这篇文章还没有配图。**公众号的草稿必须有封面图**
 ## 许可
 
 仅供学习与内部使用。
+
+### 文章自动排版
+
+打开侧栏「Markdown 排版」，导入 DOCX / TXT / MD，或在正文框粘贴整篇文章。
+默认开启「导入 / 粘贴后自动整理」，使用已有 LLM 配置为正文建议小标题、分点、加粗、高亮及少量斜体；会发送正文给模型并产生供应商 API 费用，可以关闭。
+
+- 模型只返回排版计划，客户端按原文位置应用；不会让模型重写整篇文章。分点须有清单提示或明确序号，避免破坏叙述。
+- 「撤销自动整理」恢复整理前正文，浏览器草稿同时保留该备份；整理期间编辑正文会取消待应用的建议。
+- 删除线保留已有格式或手动添加，不由 AI 自动添加。Word 的加粗、高亮、斜体和删除线可导入。
+- 自动整理支持最多 200 个正文段落、合计 2 万字符、单段 5000 字。超限或接口失败保留全文并使用基础排版；模型格式异常会重试一次。
+- HTML / 富文本保留视觉样式；MD 高亮用 `==文字==`，需目标编辑器支持。现有文章的排版副本不会回写文章数据库。
+- 验证：`cd frontend; npm run test:documents`；后端运行 `python -m pytest apps/agent/tests/test_layout.py`。
+
+### 个人 API 配置
+
+登录后进入「设置」，可分别填写文字模型和图片模型的 HTTPS 基地址、模型名称及 API Key，支持 OpenAI 兼容接口。
+「测试连接」不保存；「保存并生效」后，下次文章生成、热点选题、自动排版或图片生成使用当前账号的对应配置，定时任务也按账号读取。关闭个人 API 并保存后使用原服务器配置。当前排版页背景是本地版式，不调用生图接口。
+
+密钥由后端使用 Fernet 加密存入数据库，不在 GET 响应中返回，不写入浏览器存储。留空保留原密钥；更换服务地址必须重新填写。`MODEL_CREDENTIAL_SECRET` 可指定独立加密密钥，留空使用 Django `SECRET_KEY`；请与数据库一起备份，切换密钥后旧凭据需要重新输入。
+
+个人地址仅支持公网 HTTPS 443 端口。调用使用经校验的公网 IP、原域名的 Host / TLS SNI 与证书校验，不跟随跳转，也不使用进程代理；服务器须能直接访问服务商。服务器管理员在环境变量中配置的原连接方式保持不变。
+文字测试发送一条短消息并产生少量费用；图片测试只读取 `/models`，不生成图片，不能证明模型支持生图。该接口不受支持时，可在保存后通过文章配图验证。
+
+部署升级时运行 `python manage.py migrate`（现有启动脚本会执行），创建 `accounts_modelconnection` 表；不要删除现有数据库或用户数据。
+个人 API 在检测到 TUN 代理的 `198.18.0.0/15` 虚拟 DNS 地址时，会向 Cloudflare 公共 DNS 查询实际公网 A 记录，再固定该地址连接；不向 DNS 服务发送 API 密钥。内网与保留地址仍被拒绝。

@@ -45,6 +45,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '创建文章' },
       },
       {
+        path: 'trends',
+        name: 'trend-topics',
+        component: () => import('@/pages/TrendTopics.vue'),
+        meta: { title: '热点选题' },
+      },
+      {
         path: 'articles',
         name: 'article-history',
         component: () => import('@/pages/ArticleHistory.vue'),
@@ -55,6 +61,12 @@ const routes: RouteRecordRaw[] = [
         name: 'article-detail',
         component: () => import('@/pages/ArticleDetail.vue'),
         meta: { title: '文章详情' },
+      },
+      {
+        path: 'markdown',
+        name: 'markdown-layout',
+        component: () => import('@/pages/MarkdownLayout.vue'),
+        meta: { title: 'Markdown 排版' },
       },
       {
         path: 'settings',

@@ -89,7 +89,7 @@ class AgentService:
         异常：AppError 的子类（前端会收到 code + 中文 message + request_id）
         """
         limits = settings.AGENT_LIMITS
-        model_name = get_model_name()
+        model_name = get_model_name(user=user)
 
         # ---- 步骤 0：每日额度检查 ----
         # ★ 放在最前面（连 Conversation 都还没建）是因为这一层拦的是"花不花钱"，
@@ -155,9 +155,11 @@ class AgentService:
             token = activate(registry)
             try:
                 draft, _messages = run_content_agent(
+                    user=user,
                     user_prompt=user_prompt,
                     collector=collector,
                     trace_id=trace,
+                    json_fallback=bool(request_data.get("trend_json_fallback", False)),
                 )
             except Exception:
                 # ★ 失败也要把**已经发生**的工具调用记下来。
