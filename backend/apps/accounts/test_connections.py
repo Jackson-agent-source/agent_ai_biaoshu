@@ -101,6 +101,14 @@ def test_fake_dns_is_resolved_independently_and_still_rejects_private_answers(mo
 
 @pytest.mark.django_db
 def test_layout_uses_saved_account_model(auth_client, other_user, user, mocker, public_dns, settings):
+    settings.LLM_API_KEY = ''
+    settings.LLM_MODEL = ''
+    overview = auth_client.get(URL)
+    assert overview.status_code == 200
+    assert overview.json()['data']['text']['default_available'] is False
+    from apps.common.exceptions import ModelProviderError
+    with pytest.raises(ModelProviderError, match='网页「设置」'):
+        get_chat_model(user=user)
     auth_client.put(URL + '/text', CONFIG, format='json')
     factory = mocker.patch('langchain_openai.ChatOpenAI')
     factory.return_value.invoke.return_value = SimpleNamespace(content='{"emphasis":[]}')
@@ -173,7 +181,9 @@ def test_image_generation_uses_personal_key_and_saves_correct_model(auth_client,
 
 
 @pytest.mark.django_db
-def test_article_generation_reads_personal_connection(auth_client, user, mocker, public_dns):
+def test_article_generation_reads_personal_connection(auth_client, user, mocker, public_dns, settings):
+    settings.LLM_API_KEY = ''
+    settings.LLM_MODEL = ''
     from apps.agent.services.agent_service import AgentService
     from apps.agent.tests.fakes import ScriptedChatModel, make_article_draft_message, sample_draft_args
     auth_client.put(URL + '/text', CONFIG, format='json')

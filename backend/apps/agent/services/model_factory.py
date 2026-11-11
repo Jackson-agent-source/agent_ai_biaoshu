@@ -93,7 +93,7 @@ def get_chat_model(
     resolved_temperature = settings.LLM_TEMPERATURE if temperature is None else temperature
 
     if not resolved_model:
-        raise ModelProviderError("还没有配置 LLM_MODEL，请在后端 .env 文件里填写模型名称。")
+        raise ModelProviderError("尚未配置文字模型，请在网页「设置」中填写模型名称和 API Key，或由管理员配置服务器默认模型。")
 
     if provider in _OPENAI_COMPATIBLE_PROVIDERS:
         return _build_openai_compatible_model(
@@ -137,7 +137,7 @@ def _build_openai_compatible_model(
 
     if not api_key:
         raise ModelProviderError(
-            "还没有配置 LLM_API_KEY，请在后端 .env 文件里填写你的 API Key。"
+            "尚未配置文字模型 API Key，请在网页「设置」中填写并启用个人 API，或由管理员配置服务器默认 LLM_API_KEY。"
         )
 
     kwargs: dict = {

@@ -12,6 +12,37 @@ BACKEND = Path(__file__).resolve().parents[3]
 ROOT = BACKEND.parent
 
 
+@pytest.mark.parametrize("api_key", [None, "", "test-default-key"])
+@pytest.mark.parametrize("secret, expected", [("test-deployment-secret", 0), ("change-me-to-a-random-string", 1)])
+def test_web_startup_allows_personal_api_setup_but_requires_secure_secret(tmp_path, api_key, secret, expected):
+    bash = r"C:\Program Files\Git\bin\bash.exe" if os.name == "nt" else shutil.which("bash")
+    if not bash or not Path(bash).exists():
+        pytest.skip("POSIX shell unavailable")
+    # Execute the startup script; replace database/Django/server processes with
+    # recording functions so this test cannot touch an actual database or bind ports.
+    harness = r'''
+python() { printf 'python %s\n' "$*" >> "$RUN_LOG"; }
+exec() { printf 'exec %s\n' "$*" >> "$RUN_LOG"; }
+. "$0"
+'''
+    env = {**os.environ, "DJANGO_SECRET_KEY": secret, "DEBUG": "False",
+           "RUN_LOG": (tmp_path / "startup").as_posix()}
+    env.pop("LLM_API_KEY", None)
+    if api_key is not None:
+        env["LLM_API_KEY"] = api_key
+    result = subprocess.run([bash, "-c", harness, (BACKEND / "entrypoint.sh").as_posix()],
+                            cwd=tmp_path, env=env, capture_output=True, text=True, encoding="utf-8", timeout=10)
+    assert result.returncode == expected, result.stderr
+    log = tmp_path / "startup"
+    if expected == 0:
+        commands = log.read_text()
+        assert "python manage.py migrate --noinput" in commands
+        assert "python manage.py collectstatic --noinput" in commands
+        assert "exec gunicorn config.wsgi:application" in commands
+    else:
+        assert not log.exists()
+
+
 def test_compose_scheduler_uses_backend_database_and_media():
     services = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))["services"]
     backend, scheduler = services["backend"], services["trend_scheduler"]

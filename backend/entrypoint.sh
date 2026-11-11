@@ -32,9 +32,8 @@ case "$DJANGO_SECRET_KEY" in
         ;;
 esac
 
-if [ -z "$LLM_API_KEY" ]; then
-    echo "    !! LLM_API_KEY 是空的，Agent 没法工作。"
-    exit 1
+if [ -z "${LLM_API_KEY:-}" ]; then
+    echo "    未配置服务器默认文字 API；网站正常启动，请登录后在设置中配置个人 API。"
 fi
 
 # ---------- 等数据库 ----------
