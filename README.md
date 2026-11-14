@@ -2303,6 +2303,24 @@ docker compose -f docker-compose.yml -f compose.standalone.yml exec backend pyth
 
 更新和停止时也使用相同的两个 `-f` 参数。不要执行 `down -v`，数据库、图片以及 `caddy_data` 中的证书都需要持久保存。首次启动时检查 `https` 服务日志与域名的 `/health/` 响应；DNS 尚未生效或 80/443 不通时，证书申请不能完成。
 
+### 不用域名，通过公网 IP 访问
+
+已经按独立服务器方式构建并启动的站点，可以直接切换到公网 IPv4 + HTTPS。无需购买域名或设置 DNS；80/443 仍须放行。
+
+```bash
+cd /opt/ai-content-agent
+git pull --ff-only
+bash deploy/use-ip.sh 87.83.207.66
+```
+
+换成自己服务器的公网 IP。脚本在修改前保存 `.env.backup-ip-时间戳`，更新站点地址、允许的主机、图片地址和证书配置，保留数据库密码、Django 密钥、个人 API 和注册策略；复用已构建的应用镜像，不删除数据卷。原有未部署的本地代码修改不会因此自动上线。
+
+入口使用 Caddy 2.11.9、Let's Encrypt `shortlived` 证书配置和自动续期。`default_sni` 处理浏览器通过 IP 访问时不发送 SNI 的情况；证书保存在原有 `caddy_data` 卷。参考：[Let's Encrypt IP 证书说明](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability)、[Caddy ACME 配置](https://caddyserver.com/docs/caddyfile/directives/tls)。
+
+看到 `READY: https://公网IP/login` 才表示证书校验、前端、后端健康检查和未登录 API 的 401 检查均通过。首次签发可能需要等待；失败会输出 Caddy 日志。不要通过忽略证书错误来验收。更新/重启继续使用原来的 `docker compose -f docker-compose.yml -f compose.standalone.yml ...` 命令。
+
+恢复域名时，把 `.env` 中 `SITE_ORIGIN`、`ALLOWED_HOSTS`、`CSRF_TRUSTED_ORIGINS`、`MEDIA_PUBLIC_BASE_URL` 改回域名，并将 `CADDY_CONFIG_FILE=./deploy/Caddyfile`；重新执行 `up -d` 并重启 `web`。已有账号、文章和 API 密钥无需重建。
+
 ### 个人 API 配置
 
 登录后进入「设置」，可分别填写文字模型和图片模型的 HTTPS 基地址、模型名称及 API Key，支持 OpenAI 兼容接口。

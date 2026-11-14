@@ -1,0 +1,13 @@
+{
+	# Browsers omit TLS SNI when navigating to a literal IP address.
+	default_sni {$PUBLIC_IP}
+}
+
+https://{$PUBLIC_IP} {
+	tls {
+		issuer acme https://acme-v02.api.letsencrypt.org/directory {
+			profile shortlived
+		}
+	}
+	reverse_proxy web:80
+}

@@ -7,15 +7,16 @@ services:
       GUNICORN_THREADS: "2"
 
   https:
-    image: caddy:2-alpine
+    image: ${CADDY_IMAGE:-caddy:2-alpine}
     restart: unless-stopped
     environment:
-      SITE_ORIGIN: ${SITE_ORIGIN:?Set SITE_ORIGIN to your https domain in .env}
+      SITE_ORIGIN: ${SITE_ORIGIN:?Set SITE_ORIGIN to your https site address in .env}
+      PUBLIC_IP: ${PUBLIC_IP:-}
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${CADDY_CONFIG_FILE:-./deploy/Caddyfile}:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
